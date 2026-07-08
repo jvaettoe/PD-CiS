@@ -75,22 +75,30 @@ def _kwargs_key(model_kwargs: dict) -> str:
     return "_".join(f"{k}{model_kwargs[k]}" for k in sorted(model_kwargs))
 
 
+def _fmt_n(n_exp: float) -> str:
+    """Format the loss exponent for filenames: 2.0 -> '2', 2.5 -> '2.5'."""
+    return f"{n_exp:g}"
+
+
 def checkpoint_path(str_p: str, model_cls: type, model_kwargs: dict,
-                    seed: int = 42, ckpt_dir: str = CKPT_DIR) -> str:
-    """checkpoints/ncc_{ModelName}_{sortedkwargs}_p{str_p}_s{seed}.pt
+                    seed: int = 42, ckpt_dir: str = CKPT_DIR,
+                    n_exp: float = 2.0) -> str:
+    """checkpoints/ncc_{ModelName}_{sortedkwargs}_p{str_p}_n{n_exp}_s{seed}.pt
 
     Keyed by the *string* p (reuses the exact tokens in str_train_ps and avoids
-    0.001-vs-1e-3 float ambiguity); model class name + sorted kwargs + seed make
-    any architecture/seed change yield a distinct artifact instead of silently
-    reloading a stale one, and stop LinearMLP/EmbedMLP with matching n_features/
-    d_mlp from colliding."""
-    fname = f"ncc_{model_cls.__name__}_{_kwargs_key(model_kwargs)}_p{str_p}_s{seed}.pt"
+    0.001-vs-1e-3 float ambiguity); model class name + sorted kwargs + loss
+    exponent + seed make any architecture/exponent/seed change yield a distinct
+    artifact instead of silently reloading a stale one, and stop LinearMLP/
+    EmbedMLP with matching n_features/d_mlp from colliding."""
+    fname = (f"ncc_{model_cls.__name__}_{_kwargs_key(model_kwargs)}"
+             f"_p{str_p}_n{_fmt_n(n_exp)}_s{seed}.pt")
     return os.path.join(ckpt_dir, fname)
 
 
 def save_checkpoint(path: str, model: MLP, dataset: SparseDataset,
                     losses: list[float], *, seed: int, n_steps: int,
-                    batch_size: int = 2048, cosine_scheduler: bool = True) -> None:
+                    batch_size: int = 2048, cosine_scheduler: bool = True,
+                    n_exp: float = 2.0) -> None:
     """Persist everything needed to reconstruct model AND dataset deterministically.
     device is deliberately not saved (machine-dependent; chosen at load time).
     Model is stored generically via its class name + config() so any MLP subclass
@@ -111,6 +119,7 @@ def save_checkpoint(path: str, model: MLP, dataset: SparseDataset,
         "losses": losses,
         "seed": seed,
         "n_steps": n_steps,
+        "n_exp": n_exp,
         "batch_size": batch_size,
         "cosine_scheduler": cosine_scheduler,
     }
@@ -140,15 +149,19 @@ def load_or_train(str_p: str, model_cls: type = LinearMLP,
                   exactly_one_active_feature: bool = False,
                   base_steps: int = 10_000, batch_size: int = 2048,
                   cosine_scheduler: bool = True, retrain: bool = False,
-                  ckpt_dir: str = CKPT_DIR, device: str | None = None) -> dict:
+                  ckpt_dir: str = CKPT_DIR, device: str | None = None,
+                  n_exp: float = 2.0) -> dict:
     """Loads a matching checkpoint if one exists, otherwise trains from scratch and
     saves it. Generic over MLP subclass: the caller specializes by passing model_cls
     and model_kwargs, e.g. load_or_train("0.1", LinearMLP, {"n_features":50,"d_mlp":50})
     or load_or_train("0.1", EmbedMLP, {"n_features":50,"d_emb":16,"d_mlp":50}). The
-    dataset shares n_features with the model (read from model_kwargs)."""
+    dataset shares n_features with the model (read from model_kwargs). n_exp is the
+    training-loss exponent (loss = |out - labels|**n_exp); it is part of the
+    checkpoint key so distinct exponents yield distinct artifacts."""
     model_kwargs = model_kwargs or {"n_features": 50, "d_mlp": 50}
     n_features = model_kwargs["n_features"]
-    path = checkpoint_path(str_p, model_cls, model_kwargs, seed=seed, ckpt_dir=ckpt_dir)
+    path = checkpoint_path(str_p, model_cls, model_kwargs, seed=seed,
+                           ckpt_dir=ckpt_dir, n_exp=n_exp)
     if os.path.exists(path) and not retrain:
         return load_checkpoint(path, device=device)
 
@@ -160,10 +173,11 @@ def load_or_train(str_p: str, model_cls: type = LinearMLP,
                            exactly_one_active_feature=exactly_one_active_feature)
     model = model_cls(device=device, **model_kwargs)
     n_steps = compute_n_steps(p, n_features, base_steps)
-    losses = train(model, dataset, batch_size=batch_size, steps=n_steps,
+    losses = train(model, dataset, n=n_exp, batch_size=batch_size, steps=n_steps,
                    cosine_scheduler=cosine_scheduler)
     save_checkpoint(path, model, dataset, losses, seed=seed, n_steps=n_steps,
-                    batch_size=batch_size, cosine_scheduler=cosine_scheduler)
+                    batch_size=batch_size, cosine_scheduler=cosine_scheduler,
+                    n_exp=n_exp)
     return load_checkpoint(path, device=device)
 
 
