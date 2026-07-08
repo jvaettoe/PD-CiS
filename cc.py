@@ -57,6 +57,7 @@ def train(model: MLP, dataset: SparseDataset, n: float = 2, batch_size: int = 20
 
 CKPT_DIR = os.path.join(os.path.dirname(__file__), "checkpoints")
 _DATASET_REGISTRY = {"CleanDataset": CleanDataset, "SparseDataset": SparseDataset}
+_MODEL_REGISTRY = {"LinearMLP": LinearMLP, "EmbedMLP": EmbedMLP}
 
 
 def compute_n_steps(p: float, n_features: int, base_steps: int = 10_000) -> int:
@@ -66,26 +67,39 @@ def compute_n_steps(p: float, n_features: int, base_steps: int = 10_000) -> int:
     return int(base_steps / (1 - frac_zero))
 
 
-def checkpoint_path(str_p: str, n_features: int = 50, d_mlp: int = 50,
+def _kwargs_key(model_kwargs: dict) -> str:
+    """Deterministic, human-readable key from a model's constructor kwargs.
+    Sorted keys kill dict-ordering ambiguity. All current kwargs are ints so
+    f'{k}{v}' is exact; if a float kwarg is ever added, append a short hash of
+    repr(sorted(model_kwargs.items())) to avoid 0.1-vs-1e-1 collisions."""
+    return "_".join(f"{k}{model_kwargs[k]}" for k in sorted(model_kwargs))
+
+
+def checkpoint_path(str_p: str, model_cls: type, model_kwargs: dict,
                     seed: int = 42, ckpt_dir: str = CKPT_DIR) -> str:
-    """checkpoints/ncc_f{nf}_d{d}_p{str_p}_s{seed}.pt
+    """checkpoints/ncc_{ModelName}_{sortedkwargs}_p{str_p}_s{seed}.pt
 
     Keyed by the *string* p (reuses the exact tokens in str_train_ps and avoids
-    0.001-vs-1e-3 float ambiguity); f/d/s make architecture/seed changes yield a
-    distinct artifact instead of silently reloading a stale one."""
-    fname = f"ncc_f{n_features}_d{d_mlp}_p{str_p}_s{seed}.pt"
+    0.001-vs-1e-3 float ambiguity); model class name + sorted kwargs + seed make
+    any architecture/seed change yield a distinct artifact instead of silently
+    reloading a stale one, and stop LinearMLP/EmbedMLP with matching n_features/
+    d_mlp from colliding."""
+    fname = f"ncc_{model_cls.__name__}_{_kwargs_key(model_kwargs)}_p{str_p}_s{seed}.pt"
     return os.path.join(ckpt_dir, fname)
 
 
-def save_checkpoint(path: str, model: LinearMLP, dataset: SparseDataset,
+def save_checkpoint(path: str, model: MLP, dataset: SparseDataset,
                     losses: list[float], *, seed: int, n_steps: int,
                     batch_size: int = 2048, cosine_scheduler: bool = True) -> None:
     """Persist everything needed to reconstruct model AND dataset deterministically.
-    device is deliberately not saved (machine-dependent; chosen at load time)."""
+    device is deliberately not saved (machine-dependent; chosen at load time).
+    Model is stored generically via its class name + config() so any MLP subclass
+    (LinearMLP, EmbedMLP, ...) round-trips."""
     os.makedirs(os.path.dirname(path), exist_ok=True)
     payload = {
-        "format_version": 1,
-        "model_config": {"n_features": model.n_features, "d_mlp": model.d_mlp},
+        "format_version": 2,
+        "model_class": type(model).__name__,
+        "model_config": model.config(),
         "state_dict": model.state_dict(),
         "dataset_class": type(dataset).__name__,
         "dataset_config": {
@@ -108,7 +122,8 @@ def load_checkpoint(path: str, device: str | None = None) -> dict:
     {"model": MLP, "dataset": SparseDataset, "losses": list[float], "meta": payload}."""
     payload = torch.load(path, map_location=device or "cpu", weights_only=False)
 
-    model = LinearMLP(device=device, **payload["model_config"])
+    model_cls = _MODEL_REGISTRY[payload["model_class"]]
+    model = model_cls(device=device, **payload["model_config"])
     model.load_state_dict(payload["state_dict"])
     model.eval()
 
@@ -119,15 +134,21 @@ def load_checkpoint(path: str, device: str | None = None) -> dict:
             "losses": payload["losses"], "meta": payload}
 
 
-def load_or_train(str_p: str, *, n_features: int = 50, d_mlp: int = 50,
+def load_or_train(str_p: str, model_cls: type = LinearMLP,
+                  model_kwargs: dict | None = None, *,
                   seed: int = 42, dataset_seed: int | None = None,
                   exactly_one_active_feature: bool = False,
                   base_steps: int = 10_000, batch_size: int = 2048,
                   cosine_scheduler: bool = True, retrain: bool = False,
                   ckpt_dir: str = CKPT_DIR, device: str | None = None) -> dict:
-    """Loads a matching checkpoint if one exists, otherwise trains from scratch and saves it."""
-    path = checkpoint_path(str_p, n_features=n_features, d_mlp=d_mlp,
-                           seed=seed, ckpt_dir=ckpt_dir)
+    """Loads a matching checkpoint if one exists, otherwise trains from scratch and
+    saves it. Generic over MLP subclass: the caller specializes by passing model_cls
+    and model_kwargs, e.g. load_or_train("0.1", LinearMLP, {"n_features":50,"d_mlp":50})
+    or load_or_train("0.1", EmbedMLP, {"n_features":50,"d_emb":16,"d_mlp":50}). The
+    dataset shares n_features with the model (read from model_kwargs)."""
+    model_kwargs = model_kwargs or {"n_features": 50, "d_mlp": 50}
+    n_features = model_kwargs["n_features"]
+    path = checkpoint_path(str_p, model_cls, model_kwargs, seed=seed, ckpt_dir=ckpt_dir)
     if os.path.exists(path) and not retrain:
         return load_checkpoint(path, device=device)
 
@@ -137,10 +158,64 @@ def load_or_train(str_p: str, *, n_features: int = 50, d_mlp: int = 50,
                            seed=dataset_seed if dataset_seed is not None else seed,
                            device=device,
                            exactly_one_active_feature=exactly_one_active_feature)
-    model = LinearMLP(n_features=n_features, d_mlp=d_mlp, device=device)
+    model = model_cls(device=device, **model_kwargs)
     n_steps = compute_n_steps(p, n_features, base_steps)
     losses = train(model, dataset, batch_size=batch_size, steps=n_steps,
                    cosine_scheduler=cosine_scheduler)
     save_checkpoint(path, model, dataset, losses, seed=seed, n_steps=n_steps,
                     batch_size=batch_size, cosine_scheduler=cosine_scheduler)
     return load_checkpoint(path, device=device)
+
+
+# --------------------------------------------------------------------------
+# Demo: the generic train/save/reload path specialised to each MLP subclass.
+# The checkpoint machinery is architecture-agnostic (model.config() + registry);
+# here "main" picks LinearMLP and EmbedMLP concretely and renders the
+# feature-space weight-space plots (projected through readin()/readout() for
+# EmbedMLP).  Run:  ./.venv/bin/python cc.py
+# --------------------------------------------------------------------------
+
+if __name__ == "__main__":
+    import matplotlib
+    matplotlib.use("Agg")  # headless: write figures without a display
+
+    fig_dir = os.path.join(os.path.dirname(__file__), "figures")
+    os.makedirs(fig_dir, exist_ok=True)
+
+    str_p = "0.05"
+    specs = [
+        (LinearMLP, {"n_features": 20, "d_mlp": 20}),
+        (EmbedMLP, {"n_features": 20, "d_emb": 8, "d_mlp": 20}),
+    ]
+
+    for model_cls, model_kwargs in specs:
+        name = model_cls.__name__
+        run = load_or_train(str_p, model_cls, model_kwargs,
+                            base_steps=1_500, device="cpu")
+        model = run["model"]
+        ckpt = os.path.basename(checkpoint_path(str_p, model_cls, model_kwargs))
+        print(f"{name}: final loss {run['losses'][-1]:.4f} | ckpt {ckpt}")
+
+        # Feature-space weight view (EmbedMLP: projected via readin()/readout()).
+        fig = model.plot_weights(project=isinstance(model, EmbedMLP))
+        fig.suptitle(f"{name}: read-in / read-out (feature space)")
+        fig.savefig(os.path.join(fig_dir, f"{name}_weights.png"), dpi=90)
+        plt.close(fig)
+
+        # Effective feature -> feature map (readin() @ readout()).
+        eff = model.effective_matrix()
+        fig, ax = plt.subplots(constrained_layout=True)
+        v = eff.abs().max().item()
+        im = ax.imshow(eff.cpu().numpy(), cmap="RdBu", vmin=-v, vmax=v)
+        ax.set_title(f"{name}: effective feature->feature map")
+        fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+        fig.savefig(os.path.join(fig_dir, f"{name}_effective.png"), dpi=90)
+        plt.close(fig)
+
+        # Per-feature neuron assignment (feature-space stacked bars).
+        ax = model.plot_weight_bars(show_cbar=True)
+        ax.set_title(f"{name}: feature -> neuron assignment")
+        ax.get_figure().savefig(os.path.join(fig_dir, f"{name}_bars.png"), dpi=90)
+        plt.close(ax.get_figure())
+
+    print(f"figures written to {fig_dir}")

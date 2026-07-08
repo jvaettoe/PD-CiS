@@ -42,9 +42,30 @@ class MLP(nn.Module, ABC):
                 ) -> Float[Tensor, "batch n_features"]:
         ...
 
+    @abstractmethod
+    def config(self) -> dict:
+        """Constructor kwargs (excluding device) needed to rebuild this model.
+        Consumed by cc.save_checkpoint so any MLP subclass round-trips generically.
+        Abstract because the base has no n_features -- each subclass declares its own."""
+        ...
+
+    # Feature-space projection hooks. The effective read-in/read-out weights that map
+    # the n_features input/output space through the hidden layer. Base defaults are
+    # correct whenever d_in == d_out == n_features (LinearMLP); EmbedMLP overrides them
+    # to fold in its embedding w_e so the weight-space plots stay in feature space.
+    def readin(self) -> Float[Tensor, "n_features d_mlp"]:
+        return self.w_in
+
+    def readout(self) -> Float[Tensor, "d_mlp n_features"]:
+        return self.w_out
+
     # Visualisation suite; common for all instances of MLP modules
-    def plot_weights(self, axes: list[plt.Axes] | None = None, share_v: bool = True) -> plt.Figure:
-        """Plot the weights of the MLP."""
+    def plot_weights(self, axes: list[plt.Axes] | None = None, share_v: bool = True,
+                     project: bool = False) -> plt.Figure:
+        """Plot the weights of the MLP. By default shows the raw learned parameters
+        (for EmbedMLP these genuinely live in d_emb space -- the low-rank bottleneck).
+        project=True instead shows the feature-space read-in/read-out (readin()/readout()),
+        which for EmbedMLP folds in the embedding w_e."""
         if axes is None:
             fig, axes = plt.subplots(1, 2, constrained_layout=True, figsize=(10, 5))
         else:
@@ -52,14 +73,17 @@ class MLP(nn.Module, ABC):
             fig = axes[0].get_figure()
         cmap = mpl.colormaps["RdBu"]
 
-        axes[0].set_title("W_in")
-        axes[1].set_title("W_out.T")
+        w_in = self.readin() if project else self.w_in
+        w_out = self.readout() if project else self.w_out
+        suffix = " (feature-space)" if project else ""
+        axes[0].set_title(("read-in" if project else "W_in") + suffix)
+        axes[1].set_title(("read-out.T" if project else "W_out.T") + suffix)
 
-        absmax = self.w_in.data.abs().max()
-        im0 = axes[0].imshow(self.w_in.data.detach().cpu().numpy(), cmap=cmap, vmin=-absmax, vmax=absmax)
+        absmax = w_in.detach().abs().max()
+        im0 = axes[0].imshow(w_in.detach().cpu().numpy(), cmap=cmap, vmin=-absmax, vmax=absmax)
         if not share_v:
-            absmax = self.w_out.data.abs().max()
-        im1 = axes[1].imshow(self.w_out.data.T.detach().cpu().numpy(), cmap=cmap, vmin=-absmax, vmax=absmax)
+            absmax = w_out.detach().abs().max()
+        im1 = axes[1].imshow(w_out.T.detach().cpu().numpy(), cmap=cmap, vmin=-absmax, vmax=absmax)
 
         if not share_v:
             fig.colorbar(im0, ax=axes[0], fraction=0.046, pad=0.04)
@@ -68,8 +92,10 @@ class MLP(nn.Module, ABC):
         return fig
 
     def effective_matrix(self) -> Float[Tensor, "n_features n_features"]:
-        """Computes the linearised effective feature to feature mapping."""
-        return (self.w_in @ self.w_out).detach()
+        """Computes the linearised effective feature to feature mapping. Routed through
+        readin()/readout() so it is feature-space for every subclass (EmbedMLP:
+        w_e @ w_in @ w_out @ w_e.T rather than the raw d_emb-space w_in @ w_out)."""
+        return (self.readin() @ self.readout()).detach()
 
     def empirical_matrix(self, value: float = 1.0) -> Float[Tensor, "n_features n_features"]:
         """Empirical (post-ReLU) response matrix."""
@@ -132,8 +158,10 @@ class MLP(nn.Module, ABC):
     #     return fig
     
     def plot_weight_bars(self, bar_label: str = "MLP neuron index", show_cbar: bool = True, ax: plt.Axes | None = None, palette: str = "inferno") -> plt.Axes:
-        """Plots weights for each feature / hidden neuron pair as stacked bars"""
-        W = einops.einsum(self.w_in, self.w_out, "n_features d_mlp, d_mlp n_features -> d_mlp n_features")
+        """Plots weights for each feature / hidden neuron pair as stacked bars. Uses the
+        feature-space read-in/read-out (readin()/readout()) so each bar is a neuron's share
+        of feature n's self-computation for any subclass, EmbedMLP included."""
+        W = einops.einsum(self.readin(), self.readout(), "n_features d_mlp, d_mlp n_features -> d_mlp n_features")
         W = W.cpu().detach().numpy()
         d_mlp, n_features = W.shape
         x = np.arange(n_features)
@@ -209,7 +237,10 @@ class LinearMLP(MLP):
     def __init__(self, n_features: int, d_mlp: int, device: str | None = None):
         super().__init__(d_in=n_features, d_mlp=d_mlp, d_out=n_features, device=device)
         self.n_features = n_features
- 
+
+    def config(self) -> dict:
+        return {"n_features": self.n_features, "d_mlp": self.d_mlp}
+
     def forward(self, x: Float[Tensor, "batch n_features"], pd=None, mode: str = "real"
                 ) -> Float[Tensor, "batch n_features"]:
         if pd is None:
@@ -227,7 +258,16 @@ class EmbedMLP(MLP):
         w_e = torch.randn(n_features, d_emb, device=self.device)
         self.register_buffer("w_e", w_e / w_e.norm(dim=1, keepdim=True))
         self.w_e: Float[Tensor, "n_features d_emb"]
- 
+
+    def config(self) -> dict:
+        return {"n_features": self.n_features, "d_emb": self.d_emb, "d_mlp": self.d_mlp}
+
+    def readin(self) -> Float[Tensor, "n_features d_mlp"]:
+        return self.w_e @ self.w_in          # (n_features,d_emb) @ (d_emb,d_mlp)
+
+    def readout(self) -> Float[Tensor, "d_mlp n_features"]:
+        return self.w_out @ self.w_e.T       # (d_mlp,d_emb) @ (d_emb,n_features)
+
     def forward(self, x: Float[Tensor, "batch n_features"], pd=None, mode: str = "real"
                 ) -> Float[Tensor, "batch n_features"]:
         e = x @ self.w_e
