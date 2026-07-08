@@ -108,7 +108,7 @@ def load_checkpoint(path: str, device: str | None = None) -> dict:
     {"model": MLP, "dataset": SparseDataset, "losses": list[float], "meta": payload}."""
     payload = torch.load(path, map_location=device or "cpu", weights_only=False)
 
-    model = MLP(device=device, **payload["model_config"])
+    model = LinearMLP(device=device, **payload["model_config"])
     model.load_state_dict(payload["state_dict"])
     model.eval()
 
@@ -137,7 +137,7 @@ def load_or_train(str_p: str, *, n_features: int = 50, d_mlp: int = 50,
                            seed=dataset_seed if dataset_seed is not None else seed,
                            device=device,
                            exactly_one_active_feature=exactly_one_active_feature)
-    model = MLP(n_features=n_features, d_mlp=d_mlp, device=device)
+    model = LinearMLP(n_features=n_features, d_mlp=d_mlp, device=device)
     n_steps = compute_n_steps(p, n_features, base_steps)
     losses = train(model, dataset, batch_size=batch_size, steps=n_steps,
                    cosine_scheduler=cosine_scheduler)

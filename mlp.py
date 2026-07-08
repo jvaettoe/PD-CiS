@@ -23,14 +23,15 @@ from pd import PD
 
 class MLP(nn.Module, ABC):
     "Base class for simple single-layer MLP modules, no biases"
-    def __init__(self, n_features: int, d_mlp: int, device: str = None):
+    def __init__(self, d_in: int, d_mlp: int, d_out: int, device: str | None = None):
         super().__init__()
-        self.n_features = n_features
+        self.d_in = d_in
         self.d_mlp = d_mlp
-        self.device = device or "cuda" if torch.cuda.is_available() else "cpu"
+        self.d_out = d_out
+        self.device = device if device is not None else ("cuda" if torch.cuda.is_available() else "cpu")
 
-        self.w_in: Float[Tensor, "n_features d_mlp"] = nn.Parameter(torch.empty(n_features, d_mlp, device=self.device))
-        self.w_out: Float[Tensor, "d_mlp n_features"] = nn.Parameter(torch.empty(d_mlp, n_features, device=self.device))
+        self.w_in: Float[Tensor, "d_in d_mlp"] = nn.Parameter(torch.empty(d_in, d_mlp, device=self.device))
+        self.w_out: Float[Tensor, "d_mlp d_out"] = nn.Parameter(torch.empty(d_mlp, d_out, device=self.device))
         self.relu = nn.ReLU()
 
         nn.init.kaiming_uniform_(self.w_in)
@@ -49,7 +50,7 @@ class MLP(nn.Module, ABC):
         else:
             assert len(axes) == 2, "Must provide exactly 2 axes"
             fig = axes[0].get_figure()
-        cmap = plt.cm.get_cmap("RdBu")
+        cmap = mpl.colormaps["RdBu"]
 
         axes[0].set_title("W_in")
         axes[1].set_title("W_out.T")
@@ -79,7 +80,7 @@ class MLP(nn.Module, ABC):
     def plot_input_output_behaviour(self, ax: plt.Axes | None = None, palette: str = "viridis") -> plt.Figure:
         """Plot the input-output behaviour of the MLP."""
         fig, ax = plt.subplots(constrained_layout=True) if ax is None else (ax.get_figure(), ax)
-        cmap = plt.cm.get_cmap(palette)
+        cmap = mpl.colormaps[palette]
         for i in range(self.n_features):
             test_input = torch.zeros(1024, self.n_features, device=self.device)
             test_input[:, i] = torch.linspace(-1, 1, 1024, device=self.device)
@@ -130,12 +131,13 @@ class MLP(nn.Module, ABC):
     #     ax.set_title("Feature -> neuron assignment")
     #     return fig
     
-    def plot_weight_bars(self, bar_label: str = "MLP neuron index", cmap: bool = True, ax: plt.Axes | None = None, palette: str = "inferno") -> plt.Axes:
+    def plot_weight_bars(self, bar_label: str = "MLP neuron index", show_cbar: bool = True, ax: plt.Axes | None = None, palette: str = "inferno") -> plt.Axes:
         """Plots weights for each feature / hidden neuron pair as stacked bars"""
         W = einops.einsum(self.w_in, self.w_out, "n_features d_mlp, d_mlp n_features -> d_mlp n_features")
         W = W.cpu().detach().numpy()
         d_mlp, n_features = W.shape
         x = np.arange(n_features)
+        cmap = mpl.colormaps[palette]
         colors = [cmap(i / max(1, d_mlp - 1)) for i in range(d_mlp)]
         fig, ax = plt.subplots(constrained_layout=True) if ax is None else (ax.get_figure(), ax)
         bottom_pos = np.zeros(n_features)
@@ -149,7 +151,7 @@ class MLP(nn.Module, ABC):
             if np.any(mask_neg):
                 ax.bar(x[mask_neg], W[i][mask_neg], bottom=bottom_neg[mask_neg], label=f"{bar_label} {i}", color=colors[i])
                 bottom_neg[mask_neg] += W[i][mask_neg]
-        if cmap:
+        if show_cbar:
             sm = ScalarMappable(norm=Normalize(vmin=1, vmax=d_mlp), cmap=mpl.colormaps[palette])
             sm.set_array([])
             cbar = fig.colorbar(sm, ax=ax) 
