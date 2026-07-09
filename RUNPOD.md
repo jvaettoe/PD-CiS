@@ -40,13 +40,23 @@ model itself (Strategy A). Skip this step entirely for Strategy B.
 
 ## 2. Get the code + checkpoints onto the pod
 
-The repo lives in `PD_CiS_CC/`. Ship the code **and** the `checkpoints/` dir
-(results/ and figures/ are regenerable — no need to upload them):
+`/workspace` is the pod's **persistent volume** (a RunPod convention, not a name
+you chose) — it survives stop/start, so put the project there:
+`/workspace/PD_CiS_CC/`. Ship the code **and** the `checkpoints/` dir (results/
+and figures/ are regenerable — no need to upload them).
+
+RunPod's Connect panel gives an SSH command like
+`ssh root@194.68.x.x -p 22012 -i ~/.ssh/id_ed25519`. rsync needs the host and the
+**port** given separately (a bare `host:port` token does NOT work — the colon is
+rsync's host/path separator). Take HOST and PORT from that command:
 
 ```bash
-# from your Mac, PD_CiS_CC/ as cwd; POD = user@host:port from the runpod SSH panel
-rsync -avz --exclude '.venv' --exclude 'results' --exclude 'figures' \
-      --exclude '__pycache__' ./ "$POD:/workspace/PD_CiS_CC/"
+# from your Mac, PD_CiS_CC/ as cwd
+HOST=root@194.68.x.x        # from the Connect panel
+PORT=22012                  # the -p value from the Connect panel
+rsync -avz -e "ssh -p $PORT" \
+      --exclude '.venv' --exclude 'results' --exclude 'figures' \
+      --exclude '__pycache__' ./ "$HOST:/workspace/PD_CiS_CC/"
 ```
 
 `checkpoints/` is git-ignored, so `rsync` of the working tree (not `git clone`)
@@ -123,8 +133,8 @@ SPD rows are unaffected (SPD never used top-k).
 ## 5. Bring the results back
 
 ```bash
-rsync -avz "$POD:/workspace/PD_CiS_CC/results/" ./results/   # (or results/gpu/)
-rsync -avz "$POD:/workspace/PD_CiS_CC/figures/" ./figures/
+rsync -avz -e "ssh -p $PORT" "$HOST:/workspace/PD_CiS_CC/results/" ./results/   # (or results/gpu/)
+rsync -avz -e "ssh -p $PORT" "$HOST:/workspace/PD_CiS_CC/figures/" ./figures/
 ```
 
 `results/summary.csv` is the tidy long table (one row per run×loss-term, with the
