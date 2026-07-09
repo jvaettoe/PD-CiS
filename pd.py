@@ -231,23 +231,60 @@ class APD(PD):
 
 
 class OracleAPD(APD):
-    """APD with oracle (exact leave-one-component-out) per-example attributions.
-    C forward passes per attribution call -> expensive; GPU / small d_emb only."""
+    """APD with oracle (exact leave-one-component-out) per-example attributions:
+    A[b,c] = |MSE(forward with component c removed) - MSE(all active)|.
+
+    Vectorised: instead of C sequential forwards, all C leave-one-out ablations
+    are computed in one batched pass along a new axis. The all-ones-minus-one
+    gate makes each ablation's pre-activation the *full sum minus that one
+    component's contribution*, so the per-component contributions (h_contrib)
+    are computed ONCE and every ablation is a subtraction off the shared sum;
+    the ReLU is then applied per ablation. Same result as the loop (see the
+    equivalence test), ~C fewer kernel launches -- the whole point of the GPU
+    run. The (C, B, d_out) intermediates are the memory cost (keep batch modest;
+    ORACLE_BATCH already does)."""
+
+    @staticmethod
+    def _per_example_mse(
+        out: Float[Tensor, "... n_features"], target: Float[Tensor, "batch n_features"]
+    ) -> Tensor:
+        """Mean squared error over features, per example. Handles a plain
+        (B, n_features) output -> (B,) and a stacked (C, B, n_features) output
+        (one slice per ablation) -> (C, B), so base and the ablations share it."""
+        if out.dim() == target.dim():
+            return ((out - target) ** 2).flatten(1).mean(dim=1)            # (B,)
+        return ((out - target.unsqueeze(0)) ** 2).flatten(2).mean(dim=2)   # (C, B)
 
     def _attributions(
         self, x: Float[Tensor, "batch n_features"],
         target_output: Float[Tensor, "batch n_features"],
     ) -> Float[Tensor, "batch C"]:
-        def per_example_mse(out: Tensor) -> Tensor:
-            return ((out - target_output) ** 2).flatten(1).mean(dim=1)   # (B,)
         with torch.no_grad():
-            ones = torch.ones(x.shape[0], self.C, device=x.device)
-            base = per_example_mse(self._component_forward(x, ones))      # (B,)
-            attr = torch.zeros(x.shape[0], self.C, device=x.device)
-            for c in range(self.C):
-                g = ones.clone()
-                g[:, c] = 0.0
-                attr[:, c] = (per_example_mse(self._component_forward(x, g)) - base).abs()
+            P_in = self.components[self._key("w_in")]                 # (C, d_in, d_mlp)
+            P_out = self.components[self._key("w_out")]               # (C, d_mlp, d_out)
+            e = self.model.embed_input(x)                            # (B, d_in)
+
+            # Shared work, computed ONCE (independent of which component is gated).
+            h_contrib = torch.einsum("bi,cij->bcj", e, P_in)         # (B, C, d_mlp)
+            full_pre_h = h_contrib.sum(dim=1)                        # (B, d_mlp)
+            P_out_sum = P_out.sum(dim=0)                             # (d_mlp, d_out)
+
+            # base: every component active (gates = ones).
+            m_full = F.relu(full_pre_h) @ P_out_sum                  # (B, d_out)
+            base = self._per_example_mse(
+                self.model.unembed_output(m_full), target_output)    # (B,)
+
+            # All C leave-one-out ablations at once (axis a == removed component).
+            # pre-activation with a removed = full sum - a's own contribution.
+            pre_ablate = full_pre_h.unsqueeze(0) - h_contrib.permute(1, 0, 2)  # (C, B, d_mlp)
+            h_ablate = F.relu(pre_ablate)                                       # (C, B, d_mlp)
+            # output with a removed from BOTH layers: h_a @ (sum P_out) - h_a @ P_out[a].
+            out_full = torch.einsum("abj,jk->abk", h_ablate, P_out_sum)         # (C, B, d_out)
+            out_self = torch.einsum("abj,ajk->abk", h_ablate, P_out)            # (C, B, d_out)
+            feats = self.model.unembed_output(out_full - out_self)             # (C, B, n_features)
+
+            mse_ablate = self._per_example_mse(feats, target_output)           # (C, B)
+            attr = (mse_ablate - base.unsqueeze(0)).abs().T                    # (B, C)
         return attr
 
 
