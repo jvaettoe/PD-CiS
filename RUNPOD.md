@@ -35,7 +35,11 @@ model itself (Strategy A). Skip this step entirely for Strategy B.
 
 - GPU: anything with ≥16 GB (RTX 4090 / A5000 / A100 are all overkill-fast here;
   the models are tiny, the cost is the per-step batch-top-k). CPU/RAM modest.
-- Image: a CUDA PyTorch template (e.g. `runpod/pytorch:2.4.0-py3.11-cuda12.4`).
+- Image: pick the official **"RunPod PyTorch" template from the deploy UI's
+  template list** (simplest — always a valid tag). If you type an image instead,
+  RunPod's current tag format is `runpod/pytorch:<ver>-cu<cuda>-torch<torch>-ubuntu<os>`,
+  e.g. `runpod/pytorch:1.0.7-rc.138-cu1290-torch290-ubuntu2204`. (The old
+  `2.4.0-py3.11-cuda12.4` short form no longer exists.)
 - Disk: 5–10 GB is plenty (checkpoints + results + figures are small).
 
 ## 2. Get the code + checkpoints onto the pod
@@ -67,15 +71,19 @@ is what carries the trained models up. Check the count on the pod with
 
 ## 3. Install deps (CUDA torch — do NOT use the CPU numpy pin)
 
-The `requirements.txt` pins `torch==2.2.2` / `numpy<2` for this Mac. On the GPU,
-install a CUDA torch and let numpy float:
+The `requirements.txt` pins `torch==2.2.2` / `numpy<2` for this Mac — do NOT use
+it on the GPU. A RunPod PyTorch image already ships a working CUDA torch, so you
+only need the small extra deps. Use the image's system Python directly (no venv
+needed):
 
 ```bash
 cd /workspace/PD_CiS_CC
-python -m venv .venv && . .venv/bin/activate
-pip install torch --index-url https://download.pytorch.org/whl/cu124   # matches the image's CUDA
-pip install matplotlib einops jaxtyping tqdm pandas                    # everything except torch/numpy
+python -c "import torch; assert torch.cuda.is_available(); print(torch.__version__, torch.cuda.get_device_name(0))"
+pip install matplotlib einops jaxtyping tqdm pandas   # torch/numpy already present
 ```
+
+Only if that `assert` fails (a non-PyTorch base image) install torch yourself:
+`pip install torch --index-url https://download.pytorch.org/whl/cu124`.
 
 `torch.linalg.svdvals` (the APD simplicity term) is supported on CUDA — that's
 the whole reason for the GPU run; it is NOT supported on this Mac's MPS, which is
