@@ -2,12 +2,24 @@
 
 The faithful batch-top-k APD (and especially OracleAPD, ~C leave-one-out
 forwards/step) is ~C× costlier than the old batch-shared mask. A full-config CPU
-run is days-to-weeks; a single mid-range GPU does it in hours. This recipe runs
-**only the decompositions** on the GPU by shipping the already-trained model
-checkpoints up with the code — the models are device-agnostic and cached, so the
-GPU never retrains anything.
+run is days-to-weeks; a single mid-range GPU does it in hours.
 
-## 0. Pre-stage the models locally (already in progress)
+The device audit confirmed the whole path (training **and** decomposition) is
+CUDA-clean: `load_or_train` puts both the model and the dataset on `--device`,
+CPU-saved checkpoints map onto CUDA at load, and every tensor in `pd.py` is
+created on the right device. So the GPU can do **either or both** of the two
+jobs, and `cc.load_or_train` decides per-model from the cache:
+
+- **Cached models** you upload → loaded from disk, reused, decomposed.
+- **Uncached models** → **trained on the GPU on the spot** (tiny models, fast),
+  then decomposed.
+
+That means you do **not** have to finish the local pre-cache before going to the
+GPU — ship whatever checkpoints exist and let the GPU fill the gaps (Strategy A,
+§4). The local `--models-only` pre-caching is just a free head-start we get while
+we're on CPU anyway.
+
+## 0. (Optional) Pre-stage models locally for a head-start
 
 On this machine, warm the checkpoint cache for the whole grid (no decomposition):
 
@@ -15,8 +27,9 @@ On this machine, warm the checkpoint cache for the whole grid (no decomposition)
 ./.venv/bin/python sweep.py --models-only --n 4 2 2.5 3
 ```
 
-This writes 120 `checkpoints/*.pt` files. They are what you upload — the GPU
-skips training entirely because `cc.load_or_train` finds them on disk.
+This writes up to 120 `checkpoints/*.pt` files. Uploading them lets the GPU skip
+that training. It is **not required** to be complete — the GPU trains any missing
+model itself (Strategy A). Skip this step entirely for Strategy B.
 
 ## 1. Pick a pod
 
@@ -37,8 +50,10 @@ rsync -avz --exclude '.venv' --exclude 'results' --exclude 'figures' \
 ```
 
 `checkpoints/` is git-ignored, so `rsync` of the working tree (not `git clone`)
-is what carries the trained models up. Confirm on the pod:
-`ls /workspace/PD_CiS_CC/checkpoints | wc -l` should show 120.
+is what carries the trained models up. Check the count on the pod with
+`ls /workspace/PD_CiS_CC/checkpoints | wc -l` — however many you have is fine
+(the GPU trains the rest). For Strategy B (GPU does everything) you can add
+`--exclude 'checkpoints'` and upload no models at all.
 
 ## 3. Install deps (CUDA torch — do NOT use the CPU numpy pin)
 
@@ -65,6 +80,10 @@ priority order n = 4 → 2 → 2.5 → 3:
 python sweep.py --device cuda --n 4 2 2.5 3          # APD + OracleAPD + SPD, full grid
 ```
 
+This one command **is** both Strategy A and B: for each model it loads the
+uploaded checkpoint if present, else trains it on the GPU, then decomposes. So
+whether you uploaded all 120, some, or none, this fills in whatever's missing.
+
 Or split cheapest-first so you get APD/SPD before the slow OracleAPD:
 
 ```bash
@@ -74,6 +93,20 @@ python sweep.py --device cuda --n 4 2 2.5 3 --methods OracleAPD
 
 Everything is resumable (`results_io.is_done` per run_id), so interrupting and
 re-launching is free.
+
+### Two gotchas from the device audit
+
+- **Do NOT pass `--no-train` on the GPU.** That flag skips uncached models (it
+  exists only so a local decomposition run won't fight the background trainer).
+  On the GPU you *want* it to train the gaps, so leave it off.
+- **`--device` defaults to `cpu`.** If you forget `--device cuda`, the sweep runs
+  on the pod's CPU and you pay for an idle GPU. Verify with the pre-flight below.
+
+### Pre-flight (run once, before the sweep)
+
+```bash
+python -c "import torch; assert torch.cuda.is_available(); print('CUDA OK:', torch.cuda.get_device_name(0))"
+```
 
 ### Important: clear stale batch-shared APD rows first
 
