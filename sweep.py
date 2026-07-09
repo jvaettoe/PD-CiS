@@ -47,10 +47,13 @@ def _demb_tok(d_emb: int | None) -> str:
     return "NA" if d_emb is None else str(d_emb)
 
 
-def iter_model_specs(smoke: bool = False):
+def iter_model_specs(smoke: bool = False, n_exps=None):
     """Yield one spec dict per model to train: EmbedMLP over n_exp x p x d_emb,
-    plus a LinearMLP baseline over n_exp x p (d_emb inapplicable -> None)."""
-    n_exps = SMOKE_N_EXPS if smoke else N_EXPS
+    plus a LinearMLP baseline over n_exp x p (d_emb inapplicable -> None).
+    n_exps overrides the exponent list AND its order (used to reprioritise which
+    rows run first); everything is resumable so already-done cells just skip."""
+    if n_exps is None:
+        n_exps = SMOKE_N_EXPS if smoke else N_EXPS
     ps = SMOKE_PS if smoke else PS
     d_embs = SMOKE_D_EMBS if smoke else D_EMBS
 
@@ -147,11 +150,12 @@ def run_one_model(spec, *, methods, base_steps, device, force, smoke):
         _run_method(model, dataset, spec, method, smoke=smoke, force=force)
 
 
-def _emit_sweep_summaries(methods, smoke):
+def _emit_sweep_summaries(methods, smoke, n_exps=None):
     """Sweep-level figures: final loss vs d_emb, one series per p, per (method,
     n_exp). Regenerated from the full summary.csv each time."""
     summary = results_io.load_summary()
-    n_exps = SMOKE_N_EXPS if smoke else N_EXPS
+    if n_exps is None:
+        n_exps = SMOKE_N_EXPS if smoke else N_EXPS
     for method in methods:
         for n_exp in n_exps:
             fig = figutil.plot_sweep_summary(summary, method=method, n_exp=n_exp)
@@ -165,18 +169,19 @@ def _emit_sweep_summaries(methods, smoke):
 
 
 def main(*, smoke=False, methods=decomp_fit.METHODS, device="cpu",
-         base_steps=10_000, force=False):
+         base_steps=10_000, force=False, n_exps=None):
     assert K < C, f"K ({K}) must be < C ({C}) or minimality is trivial"
     if smoke:
         base_steps = SMOKE_BASE_STEPS
-    specs = list(iter_model_specs(smoke))
+    specs = list(iter_model_specs(smoke, n_exps=n_exps))
+    order = n_exps if n_exps is not None else (SMOKE_N_EXPS if smoke else N_EXPS)
     print(f"===== decomposition sweep ({'SMOKE' if smoke else 'FULL'}) =====")
     print(f"  models={len(specs)}  methods={list(methods)}  device={device}  "
-          f"C={C} K={K}\n")
+          f"C={C} K={K}  n_order={list(order)}\n")
     for spec in specs:
         run_one_model(spec, methods=methods, base_steps=base_steps,
                       device=device, force=force, smoke=smoke)
-    _emit_sweep_summaries(methods, smoke)
+    _emit_sweep_summaries(methods, smoke, n_exps=n_exps)
     print(f"\ndone. results -> {results_io.summary_path()} ; figures -> {figutil.FIG_ROOT}")
 
 
@@ -190,6 +195,9 @@ if __name__ == "__main__":
                     help="MLP training steps before p-scaling")
     ap.add_argument("--force", action="store_true",
                     help="re-run and replace completed decompositions")
+    ap.add_argument("--n", nargs="+", type=float, default=None, dest="n_exps",
+                    help="loss exponents to run, in priority order "
+                         "(e.g. --n 2.5 4 3 2); default is the full grid order")
     args = ap.parse_args()
     main(smoke=args.smoke, methods=args.methods, device=args.device,
-         base_steps=args.base_steps, force=args.force)
+         base_steps=args.base_steps, force=args.force, n_exps=args.n_exps)
