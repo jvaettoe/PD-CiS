@@ -123,7 +123,9 @@ def save_checkpoint(path: str, model: MLP, dataset: SparseDataset,
         "batch_size": batch_size,
         "cosine_scheduler": cosine_scheduler,
     }
-    torch.save(payload, path)
+    tmp = path + ".tmp"          # atomic write so a concurrent reader never sees a
+    torch.save(payload, tmp)     # half-written checkpoint (e.g. a --no-train decomp
+    os.replace(tmp, path)        # run alongside a background --models-only trainer)
 
 
 def load_checkpoint(path: str, device: str | None = None) -> dict:

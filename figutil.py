@@ -11,7 +11,14 @@ import matplotlib.pyplot as plt
 
 from results_io import _fmt_n
 
-FIG_ROOT = os.path.join(os.path.dirname(__file__), "figures")
+_BASE_FIG = os.path.join(os.path.dirname(__file__), "figures")
+FIG_ROOT = _BASE_FIG
+
+
+def set_tag(tag: str | None) -> None:
+    """Namespace figures under figures/<tag> (tag=None -> figures/)."""
+    global FIG_ROOT
+    FIG_ROOT = os.path.join(_BASE_FIG, tag) if tag else _BASE_FIG
 
 
 def save_fig(fig, subdir: str, filename: str, title: str,

@@ -19,8 +19,17 @@ import json
 import os
 from datetime import datetime
 
-RESULTS_DIR = os.path.join(os.path.dirname(__file__), "results")
+_BASE_RESULTS = os.path.join(os.path.dirname(__file__), "results")
+RESULTS_DIR = _BASE_RESULTS
 CURVES_DIR = os.path.join(RESULTS_DIR, "curves")
+
+
+def set_tag(tag: str | None) -> None:
+    """Namespace all outputs under results/<tag> (tag=None -> results/). Lets a
+    cheap preliminary pass write to results/prelim without touching the full run."""
+    global RESULTS_DIR, CURVES_DIR
+    RESULTS_DIR = os.path.join(_BASE_RESULTS, tag) if tag else _BASE_RESULTS
+    CURVES_DIR = os.path.join(RESULTS_DIR, "curves")
 
 SUMMARY_COLUMNS = [
     "run_id", "timestamp", "model", "n_features", "d_emb", "p", "n_exp",

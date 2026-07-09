@@ -133,8 +133,17 @@ class PD(nn.Module, ABC):
 # ------------------------
 
 class APD(PD):
+    """Attribution-based Parameter Decomposition (Braun et al., 2025) with
+    *batch top-k*: per-example attributions select ~k active components per data
+    point (top k*batch across the batch), and minimality is the reconstruction
+    error of the resulting per-example sparse forward pass."""
+
     def __init__(self, model: nn.Module, C: int, param_names: list[str] | None = None) -> None:
         super().__init__(model, C, param_names)
+        assert set(self.param_names) == {"w_in", "w_out"}, (
+            "batch-top-k APD assumes a single-hidden-layer MLP decomposing "
+            f"exactly w_in/w_out; got {self.param_names}"
+        )
         self.components = nn.ParameterDict({
             self._key(name): nn.Parameter(torch.randn(C, *t.shape, device=t.device) * self.init_scale)
             for name, t in self.targets.items()
@@ -150,63 +159,96 @@ class APD(PD):
         # all C by a mostly-zero mask, with identical gradients.
         return comps[mask.bool()].sum(dim=0)
 
-    def simplicity_loss(self, mask: dict[str, Float[Tensor, "C"]], p: float = 1.0) -> Float[Tensor, ""]:
+    def _component_forward(
+        self, x: Float[Tensor, "batch n_features"], gates: Float[Tensor, "batch C"]
+    ) -> Float[Tensor, "batch n_features"]:
+        """Single-hidden-layer MLP forward with each component c's contribution to
+        w_in AND w_out gated per-example by gates[b, c]. gates=ones reproduces the
+        dense reconstruction (== forward_dense); a per-example binary mask gives
+        the batch-top-k sparse forward. Uses the model's embed_input/unembed_output
+        so it works for LinearMLP and EmbedMLP alike. Keeps the C dimension explicit
+        (per-example masks can't be folded into one weight matrix) -- this is the
+        cost of faithful batch top-k."""
+        P_in = self.components[self._key("w_in")]              # (C, d_in, d_mlp)
+        P_out = self.components[self._key("w_out")]            # (C, d_mlp, d_out)
+        e = self.model.embed_input(x)                         # (B, d_in)
+        h_contrib = torch.einsum("bi,cij->bcj", e, P_in)      # (B, C, d_mlp)
+        pre_h = torch.einsum("bc,bcj->bj", gates, h_contrib)  # (B, d_mlp)
+        h = F.relu(pre_h)
+        o_contrib = torch.einsum("bj,cjk->bck", h, P_out)     # (B, C, d_out)
+        m = torch.einsum("bc,bck->bk", gates, o_contrib)      # (B, d_out)
+        return self.model.unembed_output(m)                   # (B, n_features)
+
+    def _attributions(
+        self, x: Float[Tensor, "batch n_features"],
+        target_output: Float[Tensor, "batch n_features"],
+    ) -> Float[Tensor, "batch C"]:
+        """Per-(example, component) attribution A[b,c] = |dL/dg_{b,c}| at g=1, with
+        L the reconstruction MSE. One backward w.r.t. the per-example gates;
+        loss-based, matching OracleAPD's exact-ablation |delta MSE|."""
+        gates = torch.ones(x.shape[0], self.C, device=x.device, requires_grad=True)
+        loss = F.mse_loss(self._component_forward(x, gates), target_output)
+        grad = torch.autograd.grad(loss, gates)[0]
+        return grad.abs().detach()
+
+    def _batch_topk_mask(
+        self, attr: Float[Tensor, "batch C"], k: int
+    ) -> Float[Tensor, "batch C"]:
+        """Batch top-k (Bussmann et al., 2024): keep the top k*batch attributions
+        across the whole (batch x C) matrix -> ~k components active per example on
+        average, but each example selects its own set. Returns a (B, C) binary mask."""
+        B, C = attr.shape
+        kbt = max(1, min(B * C, int(round(k)) * B))
+        idx = torch.topk(attr.reshape(-1), kbt).indices
+        mask = torch.zeros(B * C, device=attr.device)
+        mask[idx] = 1.0
+        return mask.reshape(B, C)
+
+    def simplicity_loss(
+        self, active: Float[Tensor, "C"], p: float = 1.0
+    ) -> Float[Tensor, ""]:
+        """L_p on the singular values of the components active for >=1 example
+        (a component is one index c shared across w_in and w_out)."""
         terms = [
-            (torch.linalg.svdvals(active).abs() ** p).sum()
-            for name, m in mask.items()
-            if (active := self.components[self._key(name)][m.bool()]).numel()
+            (torch.linalg.svdvals(sel).abs() ** p).sum()
+            for name in self.param_names
+            if (sel := self.components[self._key(name)][active.bool()]).numel()
         ]
         return torch.stack(terms).sum() if terms else torch.zeros((), device=next(self.parameters()).device)
 
-    def topk_mask(
-        self, importance: dict[str, Float[Tensor, "C"]], k: int
-    ) -> dict[str, Float[Tensor, "C"]]:
-        # One shared mask: a 'component' is one index c across ALL params.
-        combined = sum(importance.values())
-        m = torch.zeros_like(combined)
-        m[torch.topk(combined, k).indices] = 1.0
-        return {name: m for name in self.param_names}
-
-    def compute_importance(
-        self, x: Float[Tensor, "batch ..."] | Int[Tensor, "batch ..."],
-        target_output: Float[Tensor, "batch ..."],
-    ) -> dict[str, Float[Tensor, "C"]]:
-        loss = F.mse_loss(self.forward_dense(x), target_output)
-        grads = torch.autograd.grad(loss, [self.components[self._key(n)] for n in self.param_names])
-        return {
-            name: (grad * self.components[self._key(name)]).sum(dim=tuple(range(1, grad.dim()))).abs().detach()
-            for name, grad in zip(self.param_names, grads)
-        }
-
     def method_loss_terms(
-        self, x: Float[Tensor, "batch ..."] | Int[Tensor, "batch ..."],
-        target_output: Float[Tensor, "batch ..."],
+        self, x: Float[Tensor, "batch n_features"],
+        target_output: Float[Tensor, "batch n_features"],
         k: int, alpha_minimality: float = 1.0, alpha_simplicity: float = 1.0, p: float = 1.0,
     ) -> dict[str, tuple[Float[Tensor, ""], float]]:
-        mask = self.topk_mask(self.compute_importance(x, target_output), k)
+        mask = self._batch_topk_mask(self._attributions(x, target_output), k)  # (B, C)
+        out_masked = self._component_forward(x, mask)                          # sparse fwd
+        active = mask.sum(dim=0) > 0                                           # (C,) union
         return {
-            "minimal": (F.mse_loss(self.forward_masked(x, mask), target_output), alpha_minimality),
-            "simple": (self.simplicity_loss(mask, p=p), alpha_simplicity),
+            "minimal": (F.mse_loss(out_masked, target_output), alpha_minimality),
+            "simple": (self.simplicity_loss(active, p=p), alpha_simplicity),
         }
 
 
 class OracleAPD(APD):
-    """APD with oracle (exact-ablation) attributions"""
+    """APD with oracle (exact leave-one-component-out) per-example attributions.
+    C forward passes per attribution call -> expensive; GPU / small d_emb only."""
 
-    def compute_importance(
-        self, x: Float[Tensor, "batch ..."] | Int[Tensor, "batch ..."],
-        target_output: Float[Tensor, "batch ..."],
-    ) -> dict[str, Float[Tensor, "C"]]:
+    def _attributions(
+        self, x: Float[Tensor, "batch n_features"],
+        target_output: Float[Tensor, "batch n_features"],
+    ) -> Float[Tensor, "batch C"]:
+        def per_example_mse(out: Tensor) -> Tensor:
+            return ((out - target_output) ** 2).flatten(1).mean(dim=1)   # (B,)
         with torch.no_grad():
-            base = F.mse_loss(self.forward_dense(x), target_output)
-            ones = torch.ones(self.C, device=base.device)
-            scores = torch.zeros(self.C, device=base.device)
+            ones = torch.ones(x.shape[0], self.C, device=x.device)
+            base = per_example_mse(self._component_forward(x, ones))      # (B,)
+            attr = torch.zeros(x.shape[0], self.C, device=x.device)
             for c in range(self.C):
-                mask = ones.clone()
-                mask[c] = 0.0
-                out = self.forward_masked(x, {name: mask for name in self.param_names})
-                scores[c] = (F.mse_loss(out, target_output) - base).abs()
-        return {name: scores for name in self.param_names}
+                g = ones.clone()
+                g[:, c] = 0.0
+                attr[:, c] = (per_example_mse(self._component_forward(x, g)) - base).abs()
+        return attr
 
 
 # -----------------------------------

@@ -59,6 +59,16 @@ class MLP(nn.Module, ABC):
     def readout(self) -> Float[Tensor, "d_mlp n_features"]:
         return self.w_out
 
+    # Decomposition hooks. The transforms applied *around* the decomposed params
+    # (w_in, w_out): what actually feeds w_in, and how w_out's output maps back to
+    # feature space. Identity for LinearMLP; EmbedMLP folds in its embedding w_e.
+    # APD's per-component (batch-top-k) forward uses these to stay model-agnostic.
+    def embed_input(self, x: Float[Tensor, "batch n_features"]) -> Float[Tensor, "batch d_in"]:
+        return x
+
+    def unembed_output(self, m: Float[Tensor, "batch d_out"]) -> Float[Tensor, "batch n_features"]:
+        return m
+
     # Visualisation suite; common for all instances of MLP modules
     def plot_weights(self, axes: list[plt.Axes] | None = None, share_v: bool = True,
                      project: bool = False) -> plt.Figure:
@@ -267,6 +277,12 @@ class EmbedMLP(MLP):
 
     def readout(self) -> Float[Tensor, "d_mlp n_features"]:
         return self.w_out @ self.w_e.T       # (d_mlp,d_emb) @ (d_emb,n_features)
+
+    def embed_input(self, x: Float[Tensor, "batch n_features"]) -> Float[Tensor, "batch d_emb"]:
+        return x @ self.w_e
+
+    def unembed_output(self, m: Float[Tensor, "batch d_emb"]) -> Float[Tensor, "batch n_features"]:
+        return m @ self.w_e.T
 
     def forward(self, x: Float[Tensor, "batch n_features"], pd=None, mode: str = "real"
                 ) -> Float[Tensor, "batch n_features"]:

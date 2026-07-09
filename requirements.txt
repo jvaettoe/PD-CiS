@@ -1,0 +1,10 @@
+# CPU / local (macOS) pins — torch 2.2.2 requires numpy < 2.
+# On a CUDA box, install a CUDA torch build first and drop the numpy pin
+# (modern torch supports numpy 2.x). See RUNPOD.md.
+torch==2.2.2
+numpy==1.26.4
+matplotlib==3.10.9
+einops==0.8.2
+jaxtyping==0.3.7
+tqdm==4.68.4
+pandas==2.3.3
