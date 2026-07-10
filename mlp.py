@@ -54,10 +54,21 @@ class MLP(nn.Module, ABC):
     # correct whenever d_in == d_out == n_features (LinearMLP); EmbedMLP overrides them
     # to fold in its embedding w_e so the weight-space plots stay in feature space.
     def readin(self) -> Float[Tensor, "n_features d_mlp"]:
-        return self.w_in
+        return self.project_in(self.w_in)
 
     def readout(self) -> Float[Tensor, "d_mlp n_features"]:
-        return self.w_out
+        return self.project_out(self.w_out)
+
+    # Weight-space projection of an arbitrary read-in / read-out matrix into
+    # feature space (the matrix analog of embed_input/unembed_output, and what
+    # readin/readout are built on). Identity for LinearMLP; EmbedMLP folds in
+    # w_e. Lets a decomposition's per-component weights be viewed in feature
+    # space the same way the model's own weights are.
+    def project_in(self, W_in: Float[Tensor, "d_in d_mlp"]) -> Float[Tensor, "n_features d_mlp"]:
+        return W_in
+
+    def project_out(self, W_out: Float[Tensor, "d_mlp d_out"]) -> Float[Tensor, "d_mlp n_features"]:
+        return W_out
 
     # Decomposition hooks. The transforms applied *around* the decomposed params
     # (w_in, w_out): what actually feeds w_in, and how w_out's output maps back to
@@ -272,11 +283,11 @@ class EmbedMLP(MLP):
     def config(self) -> dict:
         return {"n_features": self.n_features, "d_emb": self.d_emb, "d_mlp": self.d_mlp}
 
-    def readin(self) -> Float[Tensor, "n_features d_mlp"]:
-        return self.w_e @ self.w_in          # (n_features,d_emb) @ (d_emb,d_mlp)
+    def project_in(self, W_in: Float[Tensor, "d_emb d_mlp"]) -> Float[Tensor, "n_features d_mlp"]:
+        return self.w_e @ W_in               # fold embedding: (n_features,d_emb)@(d_emb,d_mlp)
 
-    def readout(self) -> Float[Tensor, "d_mlp n_features"]:
-        return self.w_out @ self.w_e.T       # (d_mlp,d_emb) @ (d_emb,n_features)
+    def project_out(self, W_out: Float[Tensor, "d_mlp d_emb"]) -> Float[Tensor, "d_mlp n_features"]:
+        return W_out @ self.w_e.T            # (d_mlp,d_emb)@(d_emb,n_features)
 
     def embed_input(self, x: Float[Tensor, "batch n_features"]) -> Float[Tensor, "batch d_emb"]:
         return x @ self.w_e

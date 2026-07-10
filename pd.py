@@ -127,6 +127,47 @@ class PD(nn.Module, ABC):
             f"directly rather than model(x, pd=...)."
         )
 
+    # ---- component inspection: feature-space views of the learned parts ----
+
+    def _component_weight(self, name: str, c: int) -> Float[Tensor, "dim0 dim1"]:
+        """The (dim0, dim1) weight matrix contributed by a SINGLE component c to
+        parameter `name`. APD: the full component P_c. SPD: the rank-1 outer
+        product U[:, c] V[c, :]. Subclasses implement."""
+        raise NotImplementedError
+
+    def component_matrices(self, c: int) -> tuple[Tensor, Tensor]:
+        """(w_in, w_out) weight matrices of component c, raw (pre-embedding)."""
+        return self._component_weight("w_in", c), self._component_weight("w_out", c)
+
+    def component_effective(self, c: int) -> Float[Tensor, "n_features n_features"]:
+        """Feature->feature linear map of component c ALONE, folded through the
+        model's embedding -- the per-component analog of model.effective_matrix().
+        A clean decomposition -> each is ~rank-1 localised on one feature."""
+        w_in, w_out = self.component_matrices(c)
+        return (self.model.project_in(w_in) @ self.model.project_out(w_out)).detach()
+
+    def component_norms(self) -> Float[Tensor, "C"]:
+        """Frobenius norm of each component (read-in and read-out stacked), for
+        ranking which components the fit actually uses (many end up ~0)."""
+        out = []
+        for c in range(self.C):
+            w_in, w_out = self.component_matrices(c)
+            out.append((w_in.pow(2).sum() + w_out.pow(2).sum()).sqrt())
+        return torch.stack(out).detach()
+
+    def component_feature_assignment(self) -> Float[Tensor, "C n_features"]:
+        """(C, n_features): each component's mass on each feature = |diagonal of
+        its feature->feature map|. A near-permutation means one component per
+        feature; smeared rows mean superposition across components."""
+        return torch.stack([self.component_effective(c).diagonal().abs()
+                            for c in range(self.C)]).detach()
+
+    def component_singular_values(self, c: int, name: str = "w_in") -> Float[Tensor, "r"]:
+        """Singular values of component c's `name` matrix. The simplicity loss is
+        L_p on exactly these, so this reveals whether components are low-rank
+        (rank-1 = one clean mechanism) as intended."""
+        return torch.linalg.svdvals(self._component_weight(name, c)).detach()
+
 
 # ------------------------
 # APD (Braun et al., 2025)
@@ -158,6 +199,9 @@ class APD(PD):
         # Index only the k active components: k/C of the work of multiplying
         # all C by a mostly-zero mask, with identical gradients.
         return comps[mask.bool()].sum(dim=0)
+
+    def _component_weight(self, name: str, c: int) -> Float[Tensor, "dim0 dim1"]:
+        return self.components[self._key(name)][c]
 
     def _component_forward(
         self, x: Float[Tensor, "batch n_features"], gates: Float[Tensor, "batch C"]
@@ -366,6 +410,10 @@ class SPD(PD):
         key = self._key(name)
         U = self.U[key] if mask is None else self.U[key] * mask
         return U @ self.V[key]
+
+    def _component_weight(self, name: str, c: int) -> Float[Tensor, "dim0 dim1"]:
+        key = self._key(name)
+        return torch.outer(self.U[key][:, c], self.V[key][c])  # rank-1 U_c V_c
 
     def decomp_op(
         self, name: str,
