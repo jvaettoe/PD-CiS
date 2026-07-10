@@ -22,14 +22,23 @@ from datetime import datetime
 _BASE_RESULTS = os.path.join(os.path.dirname(__file__), "results")
 RESULTS_DIR = _BASE_RESULTS
 CURVES_DIR = os.path.join(RESULTS_DIR, "curves")
+DECOMPS_DIR = os.path.join(RESULTS_DIR, "decomps")
 
 
 def set_tag(tag: str | None) -> None:
     """Namespace all outputs under results/<tag> (tag=None -> results/). Lets a
     cheap preliminary pass write to results/prelim without touching the full run."""
-    global RESULTS_DIR, CURVES_DIR
+    global RESULTS_DIR, CURVES_DIR, DECOMPS_DIR
     RESULTS_DIR = os.path.join(_BASE_RESULTS, tag) if tag else _BASE_RESULTS
     CURVES_DIR = os.path.join(RESULTS_DIR, "curves")
+    DECOMPS_DIR = os.path.join(RESULTS_DIR, "decomps")
+
+
+def decomp_path(run_id: str) -> str:
+    """results/<tag>/decomps/<run_id>.pt -- the fitted decomposition's component
+    tensors, saved so components can be visualised after the fit (see
+    decomp_fit.save_decomposition / load_decomposition)."""
+    return os.path.join(DECOMPS_DIR, f"{run_id}.pt")
 
 SUMMARY_COLUMNS = [
     "run_id", "timestamp", "model", "n_features", "d_emb", "p", "n_exp",

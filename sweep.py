@@ -140,6 +140,12 @@ def _run_method(model, dataset, spec, method, *, smoke, force,
     }
     results_io.write_curve_json(run_id, config, curves)
     results_io.append_summary_rows(run_id, config, finals)
+    decomp_fit.save_decomposition(
+        run_id, pd_obj,
+        {"str_p": spec["str_p"], "model_class": spec["model"],
+         "model_kwargs": spec["model_kwargs"], "n_exp": spec["n_exp"], "seed": SEED},
+        method,
+    )
 
     demb = _demb_tok(d_emb)
     n_tok = results_io._fmt_n(spec["n_exp"])

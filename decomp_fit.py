@@ -6,11 +6,14 @@ This module is that loop plus the per-method plumbing (which PD to build, which
 loss kwargs to pass). Pure compute: it returns per-term loss curves and does no
 file I/O (see results_io.py for storage)."""
 
+import os
 from collections import defaultdict
 
 import torch
 from tqdm import tqdm
 
+import cc
+import results_io
 from cc import set_seed
 from data import SparseDataset
 from mlp import MLP
@@ -104,3 +107,48 @@ def fit_decomposition(
             if progress and step % (max(1, steps // 20)) == 0:
                 pbar.set_postfix({"total": logs.get("total", float("nan"))})
     return dict(curves)
+
+
+# --------------------------------------------------------------------------
+# Persist / reload a fitted decomposition so its components can be inspected.
+# We save ONLY the decomposition's own params (not the frozen model, which
+# lives in the checkpoint cache and is reloaded from `ckpt`), keyed by run_id.
+# --------------------------------------------------------------------------
+
+def save_decomposition(run_id: str, pd_obj: PD, ckpt_meta: dict, method: str) -> str:
+    """Write results/<tag>/decomps/<run_id>.pt = the fitted component tensors
+    plus a pointer to the model checkpoint needed to reload+project them.
+    Atomic (tmp + replace). `ckpt_meta` = {str_p, model_class, model_kwargs,
+    n_exp, seed} -- enough for load_decomposition to find the model."""
+    state = {k: v for k, v in pd_obj.state_dict().items() if not k.startswith("model.")}
+    payload = {"method": method, "C": pd_obj.C,
+               "param_names": list(pd_obj.param_names),
+               "pd_state": state, "ckpt": ckpt_meta}
+    path = results_io.decomp_path(run_id)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + ".tmp"
+    torch.save(payload, tmp)
+    os.replace(tmp, path)
+    return path
+
+
+def load_decomposition(run_id: str, device: str = "cpu") -> PD:
+    """Rebuild a fitted decomposition for inspection: reload its model from the
+    checkpoint cache, rebuild the PD, load the saved component params. Requires
+    both the decomp .pt and the model checkpoint to exist."""
+    path = results_io.decomp_path(run_id)
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"no saved decomposition for {run_id}: {path}")
+    payload = torch.load(path, map_location=device, weights_only=False)
+    ck = payload["ckpt"]
+    model_cls = cc._MODEL_REGISTRY[ck["model_class"]]
+    ckpt = cc.checkpoint_path(ck["str_p"], model_cls, ck["model_kwargs"],
+                              seed=ck["seed"], n_exp=ck["n_exp"])
+    if not os.path.exists(ckpt):
+        raise FileNotFoundError(
+            f"model checkpoint for {run_id} not found: {ckpt} "
+            f"(pull the checkpoints, or re-train that model)")
+    model = cc.load_checkpoint(ckpt, device=device)["model"]
+    pd_obj = build_pd(payload["method"], model, payload["C"])
+    pd_obj.load_state_dict(payload["pd_state"], strict=False)
+    return pd_obj
