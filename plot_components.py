@@ -8,6 +8,7 @@ singular-value spectrum, plus scalar purity/coverage metrics.
 """
 import argparse
 import os
+import re
 
 import matplotlib
 matplotlib.use("Agg")
@@ -79,7 +80,9 @@ def main():
     fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
     figs["assignment_sorted"] = fig
 
-    out_dir = os.path.join(figutil.FIG_ROOT, "components", run_id)
+    mn = re.search(r"_n([0-9.]+)_", run_id)
+    out_dir = os.path.join(figutil.FIG_ROOT, figutil.n_seg(mn.group(1) if mn else None),
+                           "components", run_id)
     os.makedirs(out_dir, exist_ok=True)
     for name, fig in figs.items():
         fig.savefig(os.path.join(out_dir, f"{name}.png"), dpi=130, bbox_inches="tight")

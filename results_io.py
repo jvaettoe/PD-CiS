@@ -136,6 +136,35 @@ def append_summary_rows(run_id: str, config: dict,
             w.writerow({**base, "term": term, "final": value})
 
 
+COMPONENT_METRICS_COLUMNS = [
+    "run_id", "timestamp", "model", "d_emb", "p", "n_exp", "method", "C",
+    "components_used", "features_covered", "mean_monosemanticity",
+]
+
+
+def component_metrics_path() -> str:
+    return os.path.join(RESULTS_DIR, "component_metrics.csv")
+
+
+def append_component_metrics(run_id: str, config: dict, metrics: dict) -> None:
+    """One tidy row per run capturing how cleanly it decomposed (components_used,
+    features_covered, mean_monosemanticity), for cross-sweep comparison. The
+    per-component monosemanticity array lives in the decomp .pt, not here."""
+    os.makedirs(RESULTS_DIR, exist_ok=True)
+    path = component_metrics_path()
+    write_header = not os.path.exists(path)
+    row = {**config, "run_id": run_id,
+           "timestamp": datetime.now().isoformat(timespec="seconds"),
+           "components_used": metrics["components_used"],
+           "features_covered": metrics["features_covered"],
+           "mean_monosemanticity": metrics["mean_monosemanticity"]}
+    with open(path, "a", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=COMPONENT_METRICS_COLUMNS, extrasaction="ignore")
+        if write_header:
+            w.writeheader()
+        w.writerow(row)
+
+
 def load_summary():
     """Return the summary as a pandas.DataFrame if pandas is importable, else a
     list[dict] via csv.DictReader. Never hard-fails on a pandas-less venv."""

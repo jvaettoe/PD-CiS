@@ -115,21 +115,23 @@ def fit_decomposition(
 # lives in the checkpoint cache and is reloaded from `ckpt`), keyed by run_id.
 # --------------------------------------------------------------------------
 
-def save_decomposition(run_id: str, pd_obj: PD, ckpt_meta: dict, method: str) -> str:
-    """Write results/<tag>/decomps/<run_id>.pt = the fitted component tensors
-    plus a pointer to the model checkpoint needed to reload+project them.
-    Atomic (tmp + replace). `ckpt_meta` = {str_p, model_class, model_kwargs,
-    n_exp, seed} -- enough for load_decomposition to find the model."""
+def save_decomposition(run_id: str, pd_obj: PD, ckpt_meta: dict, method: str) -> dict:
+    """Write results/<tag>/decomps/<run_id>.pt = the fitted component tensors, a
+    pointer to the model checkpoint needed to reload+project them, AND the
+    per-component metrics (monosemanticity etc.). Atomic (tmp + replace).
+    `ckpt_meta` = {str_p, model_class, model_kwargs, n_exp, seed}. Returns the
+    metrics dict so the caller can also log the aggregates to a CSV."""
+    metrics = pd_obj.component_metrics()
     state = {k: v for k, v in pd_obj.state_dict().items() if not k.startswith("model.")}
     payload = {"method": method, "C": pd_obj.C,
                "param_names": list(pd_obj.param_names),
-               "pd_state": state, "ckpt": ckpt_meta}
+               "pd_state": state, "ckpt": ckpt_meta, "metrics": metrics}
     path = results_io.decomp_path(run_id)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     tmp = path + ".tmp"
     torch.save(payload, tmp)
     os.replace(tmp, path)
-    return path
+    return metrics
 
 
 def load_decomposition(run_id: str, device: str = "cpu") -> PD:

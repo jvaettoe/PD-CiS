@@ -115,7 +115,7 @@ def main():
     fig.suptitle(f"Decomposition loss curves  |  {args.model}, d_emb={demb_lbl}, "
                  f"n_exp={ntok}  (color = data sparsity p)  [tag={args.tag}]", fontsize=13)
 
-    out_dir = os.path.join(figutil.FIG_ROOT, "composites")
+    out_dir = os.path.join(figutil.FIG_ROOT, figutil.n_seg(ntok), "composites")
     os.makedirs(out_dir, exist_ok=True)
     out = os.path.join(out_dir,
                        f"loss_curves_{args.model}_demb{demb_lbl}_n{ntok}.png")

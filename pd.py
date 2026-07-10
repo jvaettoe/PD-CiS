@@ -168,6 +168,29 @@ class PD(nn.Module, ABC):
         (rank-1 = one clean mechanism) as intended."""
         return torch.linalg.svdvals(self._component_weight(name, c)).detach()
 
+    def component_metrics(self, eps: float = 1e-12) -> dict:
+        """Scalar diagnostics of how cleanly the fit decomposed, computed from the
+        component->feature assignment:
+          - monosemanticity[c]  = top-feature share of component c's mass
+                                  (1.0 = c acts on a single feature)
+          - components_used      = # components with non-negligible norm
+          - features_covered     = # distinct features that are some used
+                                   component's argmax
+          - mean_monosemanticity = mean of monosemanticity over used components
+        Returned per-component AND aggregated so both can be stored."""
+        assign = self.component_feature_assignment()          # (C, n_features)
+        total = assign.sum(dim=1) + eps
+        peak = assign.max(dim=1).values
+        mono = peak / total                                   # (C,)
+        used = total > 1e-6 * total.max()
+        covered = len(set(assign.argmax(dim=1)[used].tolist())) if used.any() else 0
+        return {
+            "monosemanticity": mono.tolist(),
+            "components_used": int(used.sum().item()),
+            "features_covered": int(covered),
+            "mean_monosemanticity": float(mono[used].mean().item()) if used.any() else 0.0,
+        }
+
 
 # ------------------------
 # APD (Braun et al., 2025)

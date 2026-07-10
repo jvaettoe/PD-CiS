@@ -61,6 +61,7 @@ def main():
             fig, os.path.join("loss_curves", method),
             f"{model}_demb{dtok}_p{p}_n{ntok}_{method}{k_tok}_loss.png",
             f"{method} loss curves",
+            n_group=ntok,
             model=model, d_emb=demb, p=p, n_exp=cfg["n_exp"],
             method=method, C=cfg.get("C"), k=k,
         )
@@ -80,6 +81,7 @@ def main():
                 fig, "sweep_summary",
                 f"final_total_vs_demb__method-{method}_n-{ntok}.png",
                 f"{method}: final total loss vs d_emb",
+                n_group=ntok,
                 method=method, n_exp=ntok,
             )
             n_sweep += 1

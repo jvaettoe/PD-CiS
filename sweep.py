@@ -86,6 +86,7 @@ def _emit_model_figures(model, spec):
         figutil.save_fig(
             fig, os.path.join("model_views", spec["model"]), fname,
             f"{spec['model']} {view} (feature space)",
+            n_group=spec["n_exp"],
             model=spec["model"], n_features=N_FEATURES, d_emb=spec["d_emb"],
             p=spec["str_p"], n_exp=spec["n_exp"],
         )
@@ -140,12 +141,13 @@ def _run_method(model, dataset, spec, method, *, smoke, force,
     }
     results_io.write_curve_json(run_id, config, curves)
     results_io.append_summary_rows(run_id, config, finals)
-    decomp_fit.save_decomposition(
+    metrics = decomp_fit.save_decomposition(
         run_id, pd_obj,
         {"str_p": spec["str_p"], "model_class": spec["model"],
          "model_kwargs": spec["model_kwargs"], "n_exp": spec["n_exp"], "seed": SEED},
         method,
     )
+    results_io.append_component_metrics(run_id, config, metrics)
 
     demb = _demb_tok(d_emb)
     n_tok = results_io._fmt_n(spec["n_exp"])
@@ -155,6 +157,7 @@ def _run_method(model, dataset, spec, method, *, smoke, force,
         fig, os.path.join("loss_curves", method),
         f"{spec['model']}_demb{demb}_p{spec['str_p']}_n{n_tok}_{method}{k_tok}_loss.png",
         f"{method} loss curves",
+        n_group=spec["n_exp"],
         model=spec["model"], d_emb=d_emb, p=spec["str_p"], n_exp=spec["n_exp"],
         method=method, C=C, k=k,
     )
@@ -200,6 +203,7 @@ def _emit_sweep_summaries(methods, smoke, n_exps=None):
                 fig, "sweep_summary",
                 f"final_total_vs_demb__method-{method}_n-{n_tok}.png",
                 f"{method}: final total loss vs d_emb",
+                n_group=n_exp,
                 method=method, n_exp=n_exp, n_features=N_FEATURES,
             )
 

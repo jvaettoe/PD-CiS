@@ -21,12 +21,18 @@ def set_tag(tag: str | None) -> None:
     FIG_ROOT = os.path.join(_BASE_FIG, tag) if tag else _BASE_FIG
 
 
+def n_seg(n_group) -> str:
+    """Path segment grouping figures by loss exponent: 2.0 -> 'n2', 2.5 -> 'n2.5'.
+    Empty string when n_group is None (no grouping)."""
+    return f"n{_fmt_n(float(n_group))}" if n_group is not None else ""
+
+
 def save_fig(fig, subdir: str, filename: str, title: str,
-             *, dpi: int = 150, close: bool = True, **params) -> str:
-    """Save `fig` to FIG_ROOT/<subdir>/<filename>. The suptitle is `title` plus a
-    second line `k=v | k=v | ...` built from **params (None values dropped), so
-    every figure self-documents the config it came from."""
-    out_dir = os.path.join(FIG_ROOT, subdir)
+             *, n_group=None, dpi: int = 150, close: bool = True, **params) -> str:
+    """Save `fig` to FIG_ROOT/[n<n_group>/]<subdir>/<filename>. The suptitle is
+    `title` plus a second line `k=v | ...` from **params (None dropped). Pass
+    n_group to file the figure under a per-loss-exponent subfolder."""
+    out_dir = os.path.join(FIG_ROOT, n_seg(n_group), subdir)
     os.makedirs(out_dir, exist_ok=True)
     path = os.path.join(out_dir, filename)
     param_line = " | ".join(f"{k}={v}" for k, v in params.items() if v is not None)
