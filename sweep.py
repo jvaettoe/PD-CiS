@@ -112,6 +112,7 @@ def _run_method(model, dataset, spec, method, *, smoke, force,
         return
     if force:
         results_io.delete_summary_rows(run_id)
+        results_io.delete_component_metrics_rows(run_id)
 
     base = SMOKE_STEPS[method] if smoke else decomp_fit.METHOD_STEPS[method]
     steps = max(1, round(base * steps_scale))
@@ -139,15 +140,19 @@ def _run_method(model, dataset, spec, method, *, smoke, force,
         "lr": decomp_fit.DEFAULT_LR, "batch_size": batch, "seed": SEED,
         "loss_kwargs": loss_kwargs,
     }
+    metrics = pd_obj.component_metrics()
     results_io.write_curve_json(run_id, config, curves)
     results_io.append_summary_rows(run_id, config, finals)
-    metrics = decomp_fit.save_decomposition(
+    results_io.append_component_metrics(run_id, config, metrics)
+    # Decomp .pt is written LAST: is_done() keys on its existence (the completion
+    # sentinel), so a crash before this point re-runs the cell rather than leaving
+    # a 'done' run with no .pt for load_decomposition/plot_components.
+    decomp_fit.save_decomposition(
         run_id, pd_obj,
         {"str_p": spec["str_p"], "model_class": spec["model"],
          "model_kwargs": spec["model_kwargs"], "n_exp": spec["n_exp"], "seed": SEED},
         method,
     )
-    results_io.append_component_metrics(run_id, config, metrics)
 
     demb = _demb_tok(d_emb)
     n_tok = results_io._fmt_n(spec["n_exp"])

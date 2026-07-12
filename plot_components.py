@@ -8,7 +8,6 @@ singular-value spectrum, plus scalar purity/coverage metrics.
 """
 import argparse
 import os
-import re
 
 import matplotlib
 matplotlib.use("Agg")
@@ -20,13 +19,10 @@ import figutil
 import decomp_fit
 
 
-def _fmt_n(n: float) -> str:
-    return f"{float(n):g}"
-
-
 def build_run_id(a) -> str:
-    demb = "NA" if a.model == "LinearMLP" else str(a.demb)
-    return f"{a.model}_demb{demb}_p{a.p}_n{_fmt_n(a.n_exp)}_{a.method}"
+    demb = None if a.model == "LinearMLP" else a.demb
+    return results_io.make_run_id(model=a.model, d_emb=demb, p=a.p,
+                                  n_exp=a.n_exp, method=a.method)
 
 
 def permutation_order(assign: np.ndarray) -> np.ndarray:
@@ -35,17 +31,6 @@ def permutation_order(assign: np.ndarray) -> np.ndarray:
     peak = assign.max(axis=1)
     argf = assign.argmax(axis=1)
     return np.lexsort((-peak, argf))   # primary: owned feature; tiebreak: peak
-
-
-def purity_metrics(assign: np.ndarray) -> dict:
-    total = assign.sum(axis=1) + 1e-12
-    peak = assign.max(axis=1)
-    used = total > 1e-6 * float(total.max())
-    mono = (peak / total)[used]                        # top-feature share per used comp
-    covered = len(set(assign.argmax(axis=1)[used].tolist()))
-    return {"components_used": int(used.sum()),
-            "features_covered": covered,
-            "mean_monosemanticity": float(mono.mean()) if used.any() else 0.0}
 
 
 def main():
@@ -67,32 +52,41 @@ def main():
     run_id = a.run or build_run_id(a)
     pd_obj = decomp_fit.load_decomposition(run_id, device=a.device)
 
-    figs = figutil.plot_components(pd_obj, top=a.top)
+    try:
+        info = results_io.parse_run_id(run_id)
+    except ValueError:
+        info = {}
+    # k = round(p * n_features) is a pure function of p (APD/OracleAPD only; SPD has none)
+    k = None
+    if info.get("p") and info.get("method") in ("APD", "OracleAPD"):
+        k = max(1, min(pd_obj.C - 1, round(float(info["p"]) * 100)))
+    params = {**info, "C": pd_obj.C, "k": k, "rank": getattr(pd_obj, "rank", None)}
+    figs = figutil.plot_components(pd_obj, top=a.top, params=params)
 
-    # extra: permutation-sorted assignment (see docstring)
+    # extra: permutation-sorted assignment (see docstring), linear to match
     assign = pd_obj.component_feature_assignment().cpu().numpy()
     order = permutation_order(assign)
     fig, ax = plt.subplots(constrained_layout=True, figsize=(8, 6))
-    im = ax.imshow(assign[order], aspect="auto", cmap="magma")
+    im = ax.imshow(assign[order], aspect="auto", cmap="magma",
+                   vmin=0.0, vmax=float(assign.max()) or 1.0)
     ax.set_xlabel("feature index")
     ax.set_ylabel("component (permutation-sorted)")
-    ax.set_title("component -> feature assignment (permutation-sorted)")
+    ax.set_title("|diagonal| self-map mass (permutation-sorted)")
+    fig.suptitle(figutil.component_title("Component assignment (permutation-sorted)", params),
+                 fontsize=11)
     fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
     figs["assignment_sorted"] = fig
 
-    mn = re.search(r"_n([0-9.]+)_", run_id)
-    out_dir = os.path.join(figutil.FIG_ROOT, figutil.n_seg(mn.group(1) if mn else None),
-                           "components", run_id)
-    os.makedirs(out_dir, exist_ok=True)
-    for name, fig in figs.items():
-        fig.savefig(os.path.join(out_dir, f"{name}.png"), dpi=130, bbox_inches="tight")
-        plt.close(fig)
+    ntok = params.get("n_exp")
+    out_dir = figutil.save_component_figs(figs, run_id, n_group=ntok,
+                                          k=params.get("k"), rank=params.get("rank"))
 
-    m = purity_metrics(assign)
+    m = pd_obj.component_metrics()
     print(f"{run_id}")
-    print(f"  components used:               {m['components_used']}/{pd_obj.C}")
-    print(f"  features covered (owned by >=1): {m['features_covered']}/{assign.shape[1]}")
-    print(f"  mean monosemanticity:          {m['mean_monosemanticity']:.3f}  (1.0 = each used component sits on one feature)")
+    print(f"  components active (feature space): {m['components_used']}/{pd_obj.C}")
+    print(f"  features covered (owned by >=1):   {m['features_covered']}/{assign.shape[1]}")
+    print(f"  mean monosemanticity:             {m['mean_monosemanticity']:.3f}  (1.0 = each used component sits on one feature)")
+    print(f"  mean diagonal share:              {m['mean_diagonal_share']:.3f}  (1.0 = pure self-maps; low = off-diagonal/superposed)")
     print(f"  figures -> {out_dir}")
 
 

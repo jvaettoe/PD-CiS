@@ -29,6 +29,25 @@ DEFAULT_LR = 1e-3
 DEFAULT_BATCH = 2048
 ORACLE_BATCH = 1024
 
+# Optional global gradient-norm clip. Off by default (as in Apollo APD): the
+# svdvals-backward instability that motivated clipping is gone now that APD uses
+# factored components + a closed-form Schatten (pd.APD.simplicity_loss), so the
+# gradient is finite under rank collapse. Kept as an opt-in backstop.
+GRAD_CLIP = None
+
+# Rank budget of each APD component (P_c = A_c @ B_c, inner dim RANK). 1 => rank-1
+# components (like SPD's U@V); a rank-1 component cannot absorb the whole model,
+# which is what structurally prevents the single-component collapse.
+APD_RANK = 1
+
+# Simplicity (Schatten-p) coefficient for APD/OracleAPD. Apollo APD's
+# calc_schatten_loss is normalised /n_weight_params/batch (as ours now is) and run
+# at schatten_coeff = 1.0 -- reconstruction leads not by a tiny coefficient but by
+# the matched normalisation. (An earlier un-normalised svdvals simplicity needed
+# ~1e-5 to avoid dominating; that ad-hoc value starved the decomposition pressure
+# and caused collapse -- see the factored refactor.) Tunable/sweepable.
+ALPHA_SIMPLICITY = 1.0
+
 # For SPD, which target params get decomposed and how they are applied. Both
 # LinearMLP and EmbedMLP route w_in/w_out through decomp_op as plain matmuls
 # (EmbedMLP's embedding w_e is applied outside the pd path, so it is not
@@ -36,27 +55,31 @@ ORACLE_BATCH = 1024
 SPD_PARAM_SPECS = {"w_in": "matmul", "w_out": "matmul"}
 
 
-def build_pd(method: str, model: MLP, C: int) -> PD:
+def build_pd(method: str, model: MLP, C: int, rank: int = APD_RANK) -> PD:
     """Instantiate the decomposition for `method`. The model is frozen inside
     PD.__init__ (requires_grad_(False)), so only the decomposition's own params
-    are trainable."""
+    are trainable. `rank` is the APD/OracleAPD component rank budget (ignored by
+    SPD, whose components are rank-1 by construction)."""
     if method == "APD":
-        return APD(model, C)
+        return APD(model, C, rank=rank)
     if method == "OracleAPD":
-        return OracleAPD(model, C)
+        return OracleAPD(model, C, rank=rank)
     if method == "SPD":
         return SPD(model, C, param_specs=SPD_PARAM_SPECS)
     raise ValueError(f"Unknown method '{method}' (expected one of {METHODS})")
 
 
-def loss_kwargs_for(method: str, k: int, lp: float = 1.0) -> dict:
+def loss_kwargs_for(method: str, k: int, lp: float = 1.0,
+                    alpha_simplicity: float = ALPHA_SIMPLICITY) -> dict:
     """Method-specific kwargs forwarded verbatim into PD.loss(**kwargs).
 
     NOTE: APD's singular-value exponent is also named `p` in pd.py -- we call it
-    `lp` here so it never collides with the data sparsity `p`, and map lp -> 'p'."""
+    `lp` here so it never collides with the data sparsity `p`, and map lp -> 'p'.
+    `alpha_simplicity` downweights the Schatten-p term so reconstruction leads
+    (see ALPHA_SIMPLICITY); pass a different value to sweep the balance."""
     if method in ("APD", "OracleAPD"):
         return {"alpha_faithfulness": 1.0, "k": k,
-                "alpha_minimality": 1.0, "alpha_simplicity": 1.0, "p": lp}
+                "alpha_minimality": 1.0, "alpha_simplicity": alpha_simplicity, "p": lp}
     if method == "SPD":
         return {"alpha_faithfulness": 1.0, "alpha_recon": 1.0,
                 "alpha_recon_layerwise": 1.0, "alpha_importance": 1e-5,
@@ -76,6 +99,7 @@ def fit_decomposition(
     log_every: int = 1,
     progress: bool = True,
     desc: str = "decomp",
+    grad_clip: float | None = GRAD_CLIP,
 ) -> dict[str, list[float]]:
     """Optimise the trainable PD parameters against the FROZEN model's own output.
 
@@ -100,6 +124,8 @@ def fit_decomposition(
         opt.zero_grad()
         total, logs = pd_obj.loss(x, target, **loss_kwargs)
         total.backward()
+        if grad_clip is not None:
+            torch.nn.utils.clip_grad_norm_(params, grad_clip)
         opt.step()
         if step % log_every == 0:
             for name, value in logs.items():
@@ -124,6 +150,7 @@ def save_decomposition(run_id: str, pd_obj: PD, ckpt_meta: dict, method: str) ->
     metrics = pd_obj.component_metrics()
     state = {k: v for k, v in pd_obj.state_dict().items() if not k.startswith("model.")}
     payload = {"method": method, "C": pd_obj.C,
+               "rank": getattr(pd_obj, "rank", None),
                "param_names": list(pd_obj.param_names),
                "pd_state": state, "ckpt": ckpt_meta, "metrics": metrics}
     path = results_io.decomp_path(run_id)
@@ -151,6 +178,7 @@ def load_decomposition(run_id: str, device: str = "cpu") -> PD:
             f"model checkpoint for {run_id} not found: {ckpt} "
             f"(pull the checkpoints, or re-train that model)")
     model = cc.load_checkpoint(ckpt, device=device)["model"]
-    pd_obj = build_pd(payload["method"], model, payload["C"])
+    rank = payload.get("rank") or APD_RANK
+    pd_obj = build_pd(payload["method"], model, payload["C"], rank=rank)
     pd_obj.load_state_dict(payload["pd_state"], strict=False)
     return pd_obj

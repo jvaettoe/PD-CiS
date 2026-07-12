@@ -20,6 +20,7 @@ import numpy as np
 
 import results_io
 import figutil
+from results_io import _fmt_n
 
 # Loss terms to panel, per method (skipped silently if a curve lacks them).
 PANELS = {
@@ -27,10 +28,6 @@ PANELS = {
     "OracleAPD": ["total", "faithful", "minimal", "simple"],
     "SPD": ["total", "faithful", "recon", "importance"],
 }
-
-
-def _fmt_n(n_exp: float) -> str:
-    return f"{float(n_exp):g}"
 
 
 def discover_ps(model: str, demb, ntok: str, method: str) -> list[str]:

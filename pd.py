@@ -162,33 +162,73 @@ class PD(nn.Module, ABC):
         return torch.stack([self.component_effective(c).diagonal().abs()
                             for c in range(self.C)]).detach()
 
+    def component_effective_norms(self) -> Float[Tensor, "C"]:
+        """Frobenius norm of each component's FEATURE-SPACE effective map (after the
+        embedding projection). Unlike component_norms (raw weight space), this is
+        how much a component actually contributes to the feature->feature
+        computation: under a compressing embedding (d_emb < n_features) a component
+        can carry large raw weight norm yet a near-zero effective map, so this is
+        the honest 'is this component doing feature-space work' signal and the right
+        axis to rank/threshold components by."""
+        return torch.stack([self.component_effective(c).norm()
+                            for c in range(self.C)]).detach()
+
+    def component_diagonal_shares(self, eps: float = 1e-12) -> Float[Tensor, "C"]:
+        """(C,): fraction of each component's |effective| mass that sits on the
+        diagonal. ~1 => a clean self-feature map (monosemantic); low => the
+        component does off-diagonal / cross-feature (superposed) work, which the
+        diagonal-only assignment view renders as 'empty' even though the component
+        is active."""
+        out = []
+        for c in range(self.C):
+            e = self.component_effective(c).abs()
+            out.append(e.diagonal().sum() / (e.sum() + eps))
+        return torch.stack(out).detach()
+
     def component_singular_values(self, c: int, name: str = "w_in") -> Float[Tensor, "r"]:
         """Singular values of component c's `name` matrix. The simplicity loss is
         L_p on exactly these, so this reveals whether components are low-rank
         (rank-1 = one clean mechanism) as intended."""
         return torch.linalg.svdvals(self._component_weight(name, c)).detach()
 
-    def component_metrics(self, eps: float = 1e-12) -> dict:
-        """Scalar diagnostics of how cleanly the fit decomposed, computed from the
-        component->feature assignment:
-          - monosemanticity[c]  = top-feature share of component c's mass
-                                  (1.0 = c acts on a single feature)
-          - components_used      = # components with non-negligible norm
-          - features_covered     = # distinct features that are some used
-                                   component's argmax
-          - mean_monosemanticity = mean of monosemanticity over used components
+    def component_metrics(self, eps: float = 1e-12, active_frac: float = 0.01) -> dict:
+        """Scalar diagnostics of how cleanly the fit decomposed:
+          - monosemanticity[c]   = top-feature share of component c's DIAGONAL mass
+                                   (1.0 = c's self-map sits on one feature)
+          - components_used       = # components whose FEATURE-SPACE effective map is
+                                   >= active_frac of the largest. Thresholding on the
+                                   effective norm (not raw weight norm) is deliberate:
+                                   raw norms can be near-uniform even when most
+                                   components do no feature-space work, which made the
+                                   old norm threshold report a misleading '100/100'.
+          - features_covered      = # distinct features that are some used
+                                   component's diagonal argmax
+          - mean_monosemanticity  = mean monosemanticity over used components
+          - mean_diagonal_share   = mean, over used components, of the fraction of
+                                   |effective| mass on the diagonal (low => the used
+                                   components mostly do off-diagonal/superposed work,
+                                   so monosemanticity understates real activity)
         Returned per-component AND aggregated so both can be stored."""
-        assign = self.component_feature_assignment()          # (C, n_features)
+        assign = self.component_feature_assignment()          # (C, n_features) = |diag|
+        eff_norm = self.component_effective_norms()           # (C,) feature-space magnitude
+        diag_share = self.component_diagonal_shares(eps)      # (C,)
         total = assign.sum(dim=1) + eps
         peak = assign.max(dim=1).values
         mono = peak / total                                   # (C,)
-        used = total > 1e-6 * total.max()
+        used = eff_norm > active_frac * (eff_norm.max() + eps)
         covered = len(set(assign.argmax(dim=1)[used].tolist())) if used.any() else 0
+        # Participation ratio (Σw)^2 / Σw^2 on the effective norms: a dominance-robust
+        # "effective number of components". Unlike components_used (a >1%-of-max count,
+        # which one huge component can drag down to ~2), this is ~C when the mass is
+        # spread evenly and ~1 when a single component dominates.
+        eff_count = float((eff_norm.sum() ** 2 / (eff_norm.pow(2).sum() + eps)).item())
         return {
             "monosemanticity": mono.tolist(),
             "components_used": int(used.sum().item()),
+            "effective_count": eff_count,
             "features_covered": int(covered),
             "mean_monosemanticity": float(mono[used].mean().item()) if used.any() else 0.0,
+            "mean_diagonal_share": float(diag_share[used].mean().item()) if used.any() else 0.0,
         }
 
 
@@ -202,29 +242,50 @@ class APD(PD):
     point (top k*batch across the batch), and minimality is the reconstruction
     error of the resulting per-example sparse forward pass."""
 
-    def __init__(self, model: nn.Module, C: int, param_names: list[str] | None = None) -> None:
+    def __init__(self, model: nn.Module, C: int, rank: int = 1,
+                 param_names: list[str] | None = None) -> None:
         super().__init__(model, C, param_names)
         assert set(self.param_names) == {"w_in", "w_out"}, (
             "batch-top-k APD assumes a single-hidden-layer MLP decomposing "
             f"exactly w_in/w_out; got {self.param_names}"
         )
-        self.components = nn.ParameterDict({
-            self._key(name): nn.Parameter(torch.randn(C, *t.shape, device=t.device) * self.init_scale)
-            for name, t in self.targets.items()
-        })
+        # Apollo-APD low-rank FACTORED components: P_c = A_c @ B_c with inner
+        # dim `rank`, so each component has rank <= rank (rank=1 => rank-1, like
+        # SPD's U@V). This is deliberate: (a) the Schatten-p simplicity is then a
+        # closed-form polynomial in A,B (no svdvals -> no ill-conditioned SVD
+        # backward as components go low-rank), and (b) a rank-1 component cannot
+        # absorb the whole model, so faithfulness alone forces many active
+        # components instead of a single-component collapse.
+        self.rank = rank
+        fscale = self.init_scale ** 0.5      # so a rank-1 A@B entry ~ init_scale
+        self.A = nn.ParameterDict()
+        self.B = nn.ParameterDict()
+        for name, t in self.targets.items():
+            dim0, dim1 = t.shape
+            key = self._key(name)
+            self.A[key] = nn.Parameter(torch.randn(C, dim0, rank, device=t.device) * fscale)
+            self.B[key] = nn.Parameter(torch.randn(C, rank, dim1, device=t.device) * fscale)
+
+    def _components(self, name: str) -> Float[Tensor, "C dim0 dim1"]:
+        """Materialise the full (C, dim0, dim1) component tensor P = A @ B from its
+        low-rank factors. Kept OUT of the simplicity path (that is closed-form on
+        the factors); used by the forward, attributions and inspection."""
+        key = self._key(name)
+        return torch.einsum("cir,crj->cij", self.A[key], self.B[key])
 
     def masked_weight(
         self, name: str, mask: Float[Tensor, "C"] | None
     ) -> Float[Tensor, "dim0 dim1"]:
-        comps = self.components[self._key(name)]
+        comps = self._components(name)
         if mask is None:
             return comps.sum(dim=0)  # theta_hat = sum_c P_c
-        # Index only the k active components: k/C of the work of multiplying
-        # all C by a mostly-zero mask, with identical gradients.
+        # Index only the k active components: k/C of the work of summing
+        # all C with a mostly-zero mask, with identical gradients.
         return comps[mask.bool()].sum(dim=0)
 
     def _component_weight(self, name: str, c: int) -> Float[Tensor, "dim0 dim1"]:
-        return self.components[self._key(name)][c]
+        key = self._key(name)
+        return self.A[key][c] @ self.B[key][c]
 
     def _component_forward(
         self, x: Float[Tensor, "batch n_features"], gates: Float[Tensor, "batch C"]
@@ -236,8 +297,8 @@ class APD(PD):
         so it works for LinearMLP and EmbedMLP alike. Keeps the C dimension explicit
         (per-example masks can't be folded into one weight matrix) -- this is the
         cost of faithful batch top-k."""
-        P_in = self.components[self._key("w_in")]              # (C, d_in, d_mlp)
-        P_out = self.components[self._key("w_out")]            # (C, d_mlp, d_out)
+        P_in = self._components("w_in")                        # (C, d_in, d_mlp)
+        P_out = self._components("w_out")                      # (C, d_mlp, d_out)
         e = self.model.embed_input(x)                         # (B, d_in)
         h_contrib = torch.einsum("bi,cij->bcj", e, P_in)      # (B, C, d_mlp)
         pre_h = torch.einsum("bc,bcj->bj", gates, h_contrib)  # (B, d_mlp)
@@ -272,16 +333,28 @@ class APD(PD):
         return mask.reshape(B, C)
 
     def simplicity_loss(
-        self, active: Float[Tensor, "C"], p: float = 1.0
+        self, mask: Float[Tensor, "batch C"], p: float = 1.0, eps: float = 1e-16
     ) -> Float[Tensor, ""]:
-        """L_p on the singular values of the components active for >=1 example
-        (a component is one index c shared across w_in and w_out)."""
-        terms = [
-            (torch.linalg.svdvals(sel).abs() ** p).sum()
-            for name in self.param_names
-            if (sel := self.components[self._key(name)][active.bool()]).numel()
-        ]
-        return torch.stack(terms).sum() if terms else torch.zeros((), device=next(self.parameters()).device)
+        """Apollo-APD Schatten-p simplicity, computed in CLOSED FORM from the
+        low-rank factors A@B (spd/run_spd.py:calc_schatten_loss) -- no svdvals, so
+        the gradient stays finite as a component collapses to low rank. For each
+        component c and inner direction r, S_A[c,r]=‖A[c,:,r]‖^2, S_B[c,r]=‖B[c,r,:]‖^2,
+        and the surrogate singular value is sqrt(S_A·S_B); the penalty is
+            (1/(P·B)) Σ_b Σ_{c∈topk(b)} Σ_r (S_A[c,r]·S_B[c,r] + eps)^(p/2),
+        i.e. the per-example, frequency-weighted Schatten-p over active components,
+        normalised per weight-parameter and per example (matching Apollo). For rank
+        1 this is exactly Σ σ_c^p over active components. `p`<1 makes it rank/
+        component-sparsity inducing; the +eps guards the p<1 derivative at 0."""
+        freq = mask.mean(dim=0)                                   # (C,) activation frequency
+        penalty = mask.new_zeros(())
+        for name in self.param_names:
+            A = self.A[self._key(name)]                          # (C, dim0, rank)
+            Bf = self.B[self._key(name)]                         # (C, rank, dim1)
+            S_A = A.pow(2).sum(dim=1)                            # (C, rank) col-norms^2
+            S_B = Bf.pow(2).sum(dim=2)                           # (C, rank) row-norms^2
+            sch = (S_A * S_B + eps).pow(0.5 * p).sum(dim=1)      # (C,) per-component Schatten
+            penalty = penalty + freq @ sch
+        return penalty / self.n_weight_params
 
     def method_loss_terms(
         self, x: Float[Tensor, "batch n_features"],
@@ -290,10 +363,9 @@ class APD(PD):
     ) -> dict[str, tuple[Float[Tensor, ""], float]]:
         mask = self._batch_topk_mask(self._attributions(x, target_output), k)  # (B, C)
         out_masked = self._component_forward(x, mask)                          # sparse fwd
-        active = mask.sum(dim=0) > 0                                           # (C,) union
         return {
             "minimal": (F.mse_loss(out_masked, target_output), alpha_minimality),
-            "simple": (self.simplicity_loss(active, p=p), alpha_simplicity),
+            "simple": (self.simplicity_loss(mask, p=p), alpha_simplicity),
         }
 
 
@@ -327,8 +399,8 @@ class OracleAPD(APD):
         target_output: Float[Tensor, "batch n_features"],
     ) -> Float[Tensor, "batch C"]:
         with torch.no_grad():
-            P_in = self.components[self._key("w_in")]                 # (C, d_in, d_mlp)
-            P_out = self.components[self._key("w_out")]               # (C, d_mlp, d_out)
+            P_in = self._components("w_in")                           # (C, d_in, d_mlp)
+            P_out = self._components("w_out")                         # (C, d_mlp, d_out)
             e = self.model.embed_input(x)                            # (B, d_in)
 
             # Shared work, computed ONCE (independent of which component is gated).

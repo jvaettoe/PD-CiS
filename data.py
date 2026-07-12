@@ -1,31 +1,19 @@
-import math
-import os
 import time
+from abc import ABC, abstractmethod
+
 import torch
 import torch.nn as nn
 from torch import Tensor
-import torch.nn.functional as F
-
-import einops
-from abc import ABC, abstractmethod
-import numpy as np
-import random
-
 from jaxtyping import Float
-from tqdm import tqdm
-import matplotlib as mpl
-import matplotlib.pyplot as plt
-from matplotlib.cm import ScalarMappable
-from matplotlib.colors import Normalize
 
 
-class SparseDataset:
+class SparseDataset(ABC):
     """Dataset that generates inputs and labels for a sparse MLP; from previous paper's implementation."""
 
     def __init__(self, n_features: int, p: float, device: str = None, seed: int | None = None, exactly_one_active_feature: bool = False):
         self.n_features = n_features
         self.set_p(p, exactly_one_active_feature)
-        self.device = device or "cuda" if torch.cuda.is_available() else "cpu"
+        self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
         self.seed = seed if seed is not None else int(time.time())
         self.generator = torch.Generator(device=self.device).manual_seed(self.seed)
         self.relu = nn.ReLU()
@@ -56,11 +44,6 @@ class SparseDataset:
         labels = self._generate_labels(inputs)
         return inputs, labels
 
-    def plot_M(self, ax: plt.Axes | None = None) -> plt.Axes:
-        ax = ax or plt.subplots(constrained_layout=True)[1]
-        v = self.M.abs().max()
-        ax.matshow(self.M.cpu().detach(), cmap="RdBu", vmin=-v, vmax=v)
-        return ax
 
 class CleanDataset(SparseDataset):
     """Dataset that generates inputs and labels = ReLU(inputs)."""

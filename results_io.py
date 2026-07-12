@@ -17,6 +17,7 @@ detectable (`is_done`) and re-runs are idempotent."""
 import csv
 import json
 import os
+import re
 from datetime import datetime
 
 _BASE_RESULTS = os.path.join(os.path.dirname(__file__), "results")
@@ -63,6 +64,26 @@ def make_run_id(*, model: str, d_emb: int | None, p: str, n_exp: float,
     return f"{model}_demb{demb}_p{p}_n{_fmt_n(n_exp)}_{method}"
 
 
+_RUN_ID_RE = re.compile(
+    r"^(?P<model>.+?)_demb(?P<demb>NA|\d+)_p(?P<p>[0-9.eE+-]+)"
+    r"_n(?P<n>[0-9.]+)_(?P<method>APD|OracleAPD|SPD)$"
+)
+
+
+def parse_run_id(run_id: str) -> dict:
+    """Inverse of make_run_id: split a slug back into its identifying fields.
+    Returns {model, d_emb (int|None), p (str), n_exp (str token), method}. The
+    single source of truth for reading a run_id, so plotters don't each re-invent
+    a regex. Raises ValueError on a slug that doesn't match."""
+    m = _RUN_ID_RE.match(run_id)
+    if not m:
+        raise ValueError(f"unparseable run_id: {run_id!r}")
+    demb = m.group("demb")
+    return {"model": m.group("model"),
+            "d_emb": None if demb == "NA" else int(demb),
+            "p": m.group("p"), "n_exp": m.group("n"), "method": m.group("method")}
+
+
 def summary_path() -> str:
     return os.path.join(RESULTS_DIR, "summary.csv")
 
@@ -81,9 +102,14 @@ def _summary_run_ids() -> set[str]:
 
 
 def is_done(run_id: str) -> bool:
-    """True iff BOTH the curve JSON exists AND >=1 summary row carries this
-    run_id -- so a half-written run (one artefact but not the other) re-runs."""
-    return os.path.exists(curve_path(run_id)) and run_id in _summary_run_ids()
+    """True iff ALL THREE final artefacts exist: the curve JSON, the decomp .pt,
+    AND >=1 summary row for this run_id. A crash between any two writes therefore
+    re-runs the cell rather than leaving a 'done' run whose .pt never landed (which
+    would make load_decomposition/plot_components raise). The .pt is written last
+    (see sweep.py), so its presence is the completion sentinel."""
+    return (os.path.exists(curve_path(run_id))
+            and os.path.exists(decomp_path(run_id))
+            and run_id in _summary_run_ids())
 
 
 def write_curve_json(run_id: str, config: dict,
@@ -100,22 +126,31 @@ def write_curve_json(run_id: str, config: dict,
     return path
 
 
-def delete_summary_rows(run_id: str) -> int:
-    """Remove all rows for `run_id` from summary.csv (used by --force so a
-    re-run replaces rather than duplicates). Returns the number removed."""
-    path = summary_path()
+def _delete_rows(path: str, columns: list[str], run_id: str) -> int:
+    """Remove every row whose run_id == `run_id` from a tidy CSV, rewritten
+    atomically (tmp + os.replace) so an interrupted --force can't truncate the
+    file. Returns the number of rows removed. Shared by the summary and
+    component-metrics deleters."""
     if not os.path.exists(path):
         return 0
     with open(path, newline="") as f:
-        rows = [r for r in csv.DictReader(f)]
+        rows = list(csv.DictReader(f))
     kept = [r for r in rows if r["run_id"] != run_id]
     removed = len(rows) - len(kept)
     if removed:
-        with open(path, "w", newline="") as f:
-            w = csv.DictWriter(f, fieldnames=SUMMARY_COLUMNS, extrasaction="ignore")
+        tmp = path + ".tmp"
+        with open(tmp, "w", newline="") as f:
+            w = csv.DictWriter(f, fieldnames=columns, extrasaction="ignore")
             w.writeheader()
             w.writerows(kept)
+        os.replace(tmp, path)
     return removed
+
+
+def delete_summary_rows(run_id: str) -> int:
+    """Remove all summary.csv rows for `run_id` (used by --force so a re-run
+    replaces rather than duplicates). Returns the number removed."""
+    return _delete_rows(summary_path(), SUMMARY_COLUMNS, run_id)
 
 
 def append_summary_rows(run_id: str, config: dict,
@@ -138,12 +173,20 @@ def append_summary_rows(run_id: str, config: dict,
 
 COMPONENT_METRICS_COLUMNS = [
     "run_id", "timestamp", "model", "d_emb", "p", "n_exp", "method", "C",
-    "components_used", "features_covered", "mean_monosemanticity",
+    "components_used", "effective_count", "features_covered",
+    "mean_monosemanticity", "mean_diagonal_share",
 ]
 
 
 def component_metrics_path() -> str:
     return os.path.join(RESULTS_DIR, "component_metrics.csv")
+
+
+def delete_component_metrics_rows(run_id: str) -> int:
+    """Remove all component_metrics.csv rows for `run_id` (mirrors
+    delete_summary_rows; call it alongside on --force so a re-run replaces rather
+    than duplicates the per-run metrics row). Returns the number removed."""
+    return _delete_rows(component_metrics_path(), COMPONENT_METRICS_COLUMNS, run_id)
 
 
 def append_component_metrics(run_id: str, config: dict, metrics: dict) -> None:
@@ -156,8 +199,10 @@ def append_component_metrics(run_id: str, config: dict, metrics: dict) -> None:
     row = {**config, "run_id": run_id,
            "timestamp": datetime.now().isoformat(timespec="seconds"),
            "components_used": metrics["components_used"],
+           "effective_count": metrics.get("effective_count"),
            "features_covered": metrics["features_covered"],
-           "mean_monosemanticity": metrics["mean_monosemanticity"]}
+           "mean_monosemanticity": metrics["mean_monosemanticity"],
+           "mean_diagonal_share": metrics.get("mean_diagonal_share")}
     with open(path, "a", newline="") as f:
         w = csv.DictWriter(f, fieldnames=COMPONENT_METRICS_COLUMNS, extrasaction="ignore")
         if write_header:

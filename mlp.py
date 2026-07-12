@@ -1,6 +1,3 @@
-import math
-import os
-import time
 import torch
 import torch.nn as nn
 from torch import Tensor
@@ -9,10 +6,8 @@ import torch.nn.functional as F
 import einops
 from abc import ABC, abstractmethod
 import numpy as np
-import random
 
 from jaxtyping import Float
-from tqdm import tqdm
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 from matplotlib.cm import ScalarMappable
@@ -118,12 +113,6 @@ class MLP(nn.Module, ABC):
         w_e @ w_in @ w_out @ w_e.T rather than the raw d_emb-space w_in @ w_out)."""
         return (self.readin() @ self.readout()).detach()
 
-    def empirical_matrix(self, value: float = 1.0) -> Float[Tensor, "n_features n_features"]:
-        """Empirical (post-ReLU) response matrix."""
-        with torch.no_grad():
-            X = value * torch.eye(self.n_features, device=self.device)
-            return self(X).detach()
-    
     def plot_input_output_behaviour(self, ax: plt.Axes | None = None, palette: str = "viridis") -> plt.Figure:
         """Plot the input-output behaviour of the MLP."""
         fig, ax = plt.subplots(constrained_layout=True) if ax is None else (ax.get_figure(), ax)
@@ -142,42 +131,6 @@ class MLP(nn.Module, ABC):
         fig.suptitle("Input-output behaviour for individual features")
         return fig
 
-    # def plot_weight_bars(self, ax: plt.Axes | None = None, palette: str = "inferno") -> plt.Figure:
-    #     """Per-feature stacked bars of the neuron contributions W[d, n] = w_in[n, d] *
-    #     w_out[d, n] (each neuron's share of feature n's self-computation M_eff[n, n]).
-    #     One dominant bar => a dedicated neuron; several bars summing to ~1 =>
-    #     superposition across shared neurons; ~0 total => dropped feature. Ported from
-    #     mlpinsoup.plot_weight_bars (seaborn palette replaced by a matplotlib cmap)."""
-    #     from matplotlib.cm import ScalarMappable
-    #     from matplotlib.colors import Normalize
-    #     W = einops.einsum(self.w_in, self.w_out,
-    #                       "n_features d_mlp, d_mlp n_features -> d_mlp n_features")
-    #     W = W.cpu().detach().numpy()
-    #     d_mlp, n_features = W.shape
-    #     x = np.arange(n_features)
-    #     cmap = plt.cm.get_cmap(palette)
-    #     colors = [cmap(i / max(1, d_mlp - 1)) for i in range(d_mlp)]
-    #     fig, ax = plt.subplots(constrained_layout=True) if ax is None else (ax.get_figure(), ax)
-    #     bottom_pos = np.zeros(n_features)
-    #     bottom_neg = np.zeros(n_features)
-    #     for i in range(d_mlp):
-    #         mask_pos = W[i] >= 0
-    #         mask_neg = W[i] < 0
-    #         if np.any(mask_pos):
-    #             ax.bar(x[mask_pos], W[i][mask_pos], bottom=bottom_pos[mask_pos], color=colors[i])
-    #             bottom_pos[mask_pos] += W[i][mask_pos]
-    #         if np.any(mask_neg):
-    #             ax.bar(x[mask_neg], W[i][mask_neg], bottom=bottom_neg[mask_neg], color=colors[i])
-    #             bottom_neg[mask_neg] += W[i][mask_neg]
-    #     sm = ScalarMappable(norm=Normalize(vmin=0, vmax=d_mlp), cmap=cmap)
-    #     sm.set_array([])
-    #     fig.colorbar(sm, ax=ax).set_label("MLP neuron index")
-    #     ax.set_xlim(-0.5, n_features - 0.5)
-    #     ax.set_xlabel("feature index")
-    #     ax.set_ylabel(r"neuron contribution $w_{in}\odot w_{out}$")
-    #     ax.set_title("Feature -> neuron assignment")
-    #     return fig
-    
     def plot_weight_bars(self, bar_label: str = "MLP neuron index", show_cbar: bool = True, ax: plt.Axes | None = None, palette: str = "inferno") -> plt.Axes:
         """Plots weights for each feature / hidden neuron pair as stacked bars. Uses the
         feature-space read-in/read-out (readin()/readout()) so each bar is a neuron's share
@@ -207,50 +160,7 @@ class MLP(nn.Module, ABC):
             cbar.set_label(bar_label)
         ax.set_xlim(-0.5, n_features - 0.5)
         return ax
-    
 
-# class LinearMLP(MLP):
-#     """simple single-layer MLP module, no biases"""
-#     def __init__(self, n_features: int, d_mlp: int, device: str = None):
-#         super().__init__(n_features, d_mlp, device)
-        
-#     def forward(self, x: Float[Tensor, "batch n_features"], pd: PD | None, mode: str = "err"
-#                 ) -> Float[Tensor, "batch n_features"]:
-#         if pd is None:
-#             return F.relu(x @ self.w_in) @ self.w_out
-#         else:
-#             h = F.relu(pd.decomp_op("w_in", x, mode = mode))
-#             return pd.decomp_op("w_out", h, mode = mode)
-#         #mid_linear = einops.einsum(x, self.w_in, "batch n_features, n_features d_mlp -> batch d_mlp")
-#         #mid = self.relu(mid_linear)
-#         #out = einops.einsum(mid, self.w_out, "batch d_mlp, d_mlp n_features -> batch n_features")
-#         #return out
-    
-    
-# class EmbedMLP(MLP):
-#     """simple single-layer embedded MLP module, no biases"""
-#     def __init__(self, n_features: int, d_emb: int, d_mlp: int, device: str = None):
-#         super().__init__(n_features, d_mlp, device)
-#         self.d_emb = d_emb
-
-#         self.w_e: Float[Tensor, "n_features d_emb"] = torch.randn(n_features, d_emb, device = self.device)
-#         w_e = w_e / w_e.norm(dim=1, keepdim = True)
-#         self.register_buffer("w_e", w_e)
-
-#     def forward(self, x: Float[Tensor, "batch n_features"], pd: PD | None, mode: str = "err"
-#                 ) -> Float[Tensor, "batch n_features"]:
-#         e = x @ self.w_e
-#         if pd is None:
-#             return F.relu(x @ self.w_in) @ self.w_out
-#         else:
-#             h = F.relu(pd.decomp_op("w_in", x, mode = mode))
-#             return pd.decomp_op("w_out", h, mode = mode)
-
-#     #def forward(self, x: Float[Tensor, "batch n_features"]) -> Float[Tensor, "batch n_features"]:
-#     #    mid_linear = einops.einsum(x, self.w_in, "batch n_features, n_features d_mlp -> batch d_mlp")
-#     #    mid = self.relu(mid_linear)
-#     #    out = einops.einsum(mid, self.w_out, "batch d_mlp, d_mlp n_features -> batch n_features")
-#     #    return out
 
 class LinearMLP(MLP):
     """simple single-layer MLP module, no biases."""

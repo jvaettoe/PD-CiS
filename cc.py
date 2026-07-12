@@ -18,9 +18,10 @@ import matplotlib.pyplot as plt
 from matplotlib.cm import ScalarMappable
 from matplotlib.colors import Normalize
 
-from mlp import MLP, LinearMLP, EmbedMLP 
+from mlp import MLP, LinearMLP, EmbedMLP
 from data import SparseDataset, CleanDataset
 from pd import APD, OracleAPD, SPD
+from results_io import _fmt_n
 
 def set_seed(seed: int):
     torch.manual_seed(seed)
@@ -73,11 +74,6 @@ def _kwargs_key(model_kwargs: dict) -> str:
     f'{k}{v}' is exact; if a float kwarg is ever added, append a short hash of
     repr(sorted(model_kwargs.items())) to avoid 0.1-vs-1e-1 collisions."""
     return "_".join(f"{k}{model_kwargs[k]}" for k in sorted(model_kwargs))
-
-
-def _fmt_n(n_exp: float) -> str:
-    """Format the loss exponent for filenames: 2.0 -> '2', 2.5 -> '2.5'."""
-    return f"{n_exp:g}"
 
 
 def checkpoint_path(str_p: str, model_cls: type, model_kwargs: dict,
