@@ -9,6 +9,7 @@ import sys
 
 import matplotlib
 matplotlib.use("Agg")
+import torch
 
 import cc
 import decomp_fit
@@ -64,7 +65,11 @@ for model_name, kw, str_p in CELLS:
 
     params = {"model": model_name, "d_emb": demb, "p": str_p, "n_exp": N_EXP,
               "method": "APD", "C": C, "k": k, "rank": getattr(pd_obj, "rank", None)}
-    figs = figutil.plot_components(pd_obj, top=16, params=params)
+    xb, _ = dataset.generate_batch(1024)
+    with torch.no_grad():
+        tb = model(xb)
+    usage = pd_obj.usage_stats(xb, tb, k)
+    figs = figutil.plot_components(pd_obj, top=16, params=params, usage=usage)
     figutil.save_component_figs(figs, run_id, n_group=N_EXP, k=k,
                                 rank=getattr(pd_obj, "rank", None))
 

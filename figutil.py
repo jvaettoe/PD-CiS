@@ -109,99 +109,133 @@ def component_title(view: str, params: dict | None, diagnostic: str = "") -> str
     return f"{head}\n{second}" if second else head
 
 
-def plot_components(pd_obj, *, top: int = 16, params: dict | None = None) -> dict:
-    """Feature-space views of a fitted decomposition's learned components -- the
-    per-component analog of plot_model_views. Returns {name: Figure}:
-      'assignment' -- (C x n_features) heatmap of each component's |diagonal|
-                      self-map mass (linear scale, magma), rows sorted by EFFECTIVE
-                      norm, with a companion sidebar of each component's
-                      feature-space magnitude ‖effective‖. Read together: a bright
-                      row = a monosemantic component on one feature; a dark row next
-                      to a TALL sidebar bar = active but off-diagonal (superposed); a
-                      dark row + short bar = negligible.
-      'effective'  -- grid of the top-`top` (by EFFECTIVE norm) components'
-                      feature->feature maps (each panel scaled independently); a
-                      rank-1 blob on the diagonal = a clean found mechanism,
-                      off-diagonal structure = superposition.
-      'spectrum'   -- per-component singular values (w_in) of those top components.
-    Components are ranked by their feature-space effective norm, since raw weight
-    norm can be near-uniform even when most components do no feature-space work.
-    `params` (model/d_emb/p/n_exp/method/C/k/rank) stamps a provenance line on each
-    figure so the decomposition's model is readable from the image itself."""
+def plot_components(pd_obj, *, top: int = 16, params: dict | None = None,
+                    usage: dict | None = None) -> dict:
+    """Views of a fitted decomposition built on the fact that each component is
+    (at rank 1) a rank-1 object = (read profile u_c, write profile v_c, coupling),
+    so it is shown as its read/write feature vectors rather than a rank-1 100x100
+    map or a one-point 'spectrum'. Returns {name: Figure}:
+      'profiles'     -- top-`top` components (by effective norm), each a bar panel
+                        of the read profile |u_c| (blue, up: which input feature
+                        switches it on) and write profile |v_c| (red, down: which
+                        output feature it drives). Same peak up & down = a clean
+                        self-feature mechanism; different = a cross-feature one.
+      'assignment'   -- two (C x n_features) heatmaps, reads |u| and writes |v|,
+                        rows by effective norm. A clean decomposition is a
+                        permutation in BOTH with matching columns; a component
+                        bright in reads at i and writes at j is a cross-feature
+                        mechanism (which the old |diagonal| view erased).
+      'usage'        -- (only if `usage` from APD.usage_stats is passed) APD's OWN
+                        importance: per-component batch-top-k selection frequency,
+                        and the distribution of components-active-per-example vs k.
+      'faithfulness' -- model.effective_matrix() vs the reconstructed (Σ components)
+                        effective map vs their residual: WHERE reconstruction fails.
+    `params` stamps a model/param provenance title on each figure."""
     import math
     import numpy as np
 
     eff_norm = pd_obj.component_effective_norms().cpu().numpy()
     order = np.argsort(eff_norm)[::-1]
-    eff_sorted = eff_norm[order]
     denom = float(eff_norm.max()) + 1e-12
     n_used = int((eff_norm > 0.01 * denom).sum())
     top_idx = [int(c) for c in order[:min(top, pd_obj.C)]]
+    reads, writes = pd_obj.read_write_profiles()
+    reads, writes = reads.cpu().numpy(), writes.cpu().numpy()
+    nf = reads.shape[1]
     figs = {}
 
-    # 1. |diagonal| assignment (linear heatmap, rows by effective norm) + magnitude sidebar
-    assign = pd_obj.component_feature_assignment().cpu().numpy()[order]
-    floor = max(float(eff_sorted.max()) * 1e-4, 1e-12)
-    fig, (axh, axb) = plt.subplots(
-        1, 2, figsize=(10, 6.4), width_ratios=[8, 1.5], constrained_layout=True)
-    im = axh.imshow(assign, aspect="auto", cmap="magma",
-                    vmin=0.0, vmax=float(assign.max()) or 1.0)
-    axh.set_xlabel("feature index")
-    axh.set_ylabel("component (sorted by effective norm)")
-    fig.colorbar(im, ax=axh, fraction=0.046, pad=0.04)
-    y = np.arange(len(eff_sorted))
-    axb.plot(np.clip(eff_sorted, floor, None), y, lw=1.4, color="steelblue")
-    axb.fill_betweenx(y, floor, np.clip(eff_sorted, floor, None), alpha=0.25, color="steelblue")
-    axb.set_xscale("log")
-    axb.set_ylim(len(eff_sorted) - 0.5, -0.5)   # align row order with the heatmap
-    axb.set_yticks([])
-    axb.set_xlabel("‖effective‖")
-    axb.set_title("feature-space\nmagnitude", fontsize=9)
-    axb.grid(True, alpha=0.3, which="both")
-    fig.suptitle(component_title(
-        "Component assignment", params,
-        f"{n_used}/{pd_obj.C} components active in feature space"), fontsize=11)
-    figs["assignment"] = fig
-
-    # 2. per-component effective feature->feature maps (top components by effective norm).
-    # Each panel is scaled to ITS OWN max, not a shared vmax, so a dominant component
-    # can't wash the weaker-but-real panels to blank; the per-panel ‖eff‖ title carries
-    # the true magnitude that per-panel scaling drops.
-    effs = [pd_obj.component_effective(c).cpu().numpy() for c in top_idx]
+    # 1. read/write profiles -- the exact rank-1 signature of each top component
     ncol = min(4, len(top_idx)) or 1
     nrow = math.ceil(len(top_idx) / ncol)
-    fig, axes = plt.subplots(nrow, ncol, figsize=(2.7 * ncol, 2.7 * nrow + 0.4),
+    fig, axes = plt.subplots(nrow, ncol, figsize=(3.3 * ncol, 2.1 * nrow + 0.6),
                              constrained_layout=True, squeeze=False)
-    for i, (c, eff) in enumerate(zip(top_idx, effs)):
+    for i, c in enumerate(top_idx):
         ax = axes[i // ncol][i % ncol]
-        v = float(np.abs(eff).max()) or 1.0
-        ax.imshow(eff, cmap="RdBu", vmin=-v, vmax=v)
-        f = int(np.abs(np.diag(eff)).argmax())
-        ax.set_title(f"comp {c}: feat {f}  (‖eff‖={eff_norm[c]:.2g})", fontsize=8)
+        u, v = np.abs(reads[c]), np.abs(writes[c])
+        fr, fw = int(u.argmax()), int(v.argmax())
+        ax.bar(np.arange(nf), u, color="steelblue", width=1.0)
+        ax.bar(np.arange(nf), -v, color="indianred", width=1.0)
+        ax.axhline(0, color="k", lw=0.5)
+        ax.set_title(f"c{c}: read {fr}{' = ' if fr == fw else ' → '}write {fw}   "
+                     f"‖e‖={eff_norm[c]:.2g}", fontsize=8)
         ax.set_xticks([])
         ax.set_yticks([])
     for j in range(len(top_idx), nrow * ncol):
         axes[j // ncol][j % ncol].axis("off")
     fig.suptitle(component_title(
-        "Per-component effective maps", params,
-        f"top {len(top_idx)} by effective norm, each panel scaled independently"),
+        "Read (blue ↑) / write (red ↓) feature profiles", params,
+        f"top {len(top_idx)} by effective norm; aligned peaks = a clean self-map"),
         fontsize=11)
-    figs["effective"] = fig
+    figs["profiles"] = fig
 
-    # 3. singular-value spectrum of the top components (w_in)
-    fig, ax = plt.subplots(constrained_layout=True)
-    for c in top_idx:
-        sv = pd_obj.component_singular_values(c, "w_in").cpu().numpy()
-        ax.plot(range(1, len(sv) + 1), np.clip(sv, 1e-12, None),
-                marker=".", lw=1, alpha=0.7)
-    ax.set_yscale("log")
-    ax.set_xlabel("singular-value index")
-    ax.set_ylabel("sigma (log)")
-    ax.grid(True, alpha=0.3, which="both")
+    # 2. read/write assignment heatmaps (replaces the |diagonal| view)
+    ro, wo = np.abs(reads[order]), np.abs(writes[order])
+    fig, (a1, a2) = plt.subplots(1, 2, figsize=(12, 6), constrained_layout=True, sharey=True)
+    im1 = a1.imshow(ro, aspect="auto", cmap="magma", vmin=0.0, vmax=float(ro.max()) or 1.0)
+    a1.set_title("reads |u|  (input feature that activates the component)", fontsize=10)
+    a1.set_xlabel("feature index")
+    a1.set_ylabel("component (sorted by effective norm)")
+    fig.colorbar(im1, ax=a1, fraction=0.046, pad=0.04)
+    im2 = a2.imshow(wo, aspect="auto", cmap="magma", vmin=0.0, vmax=float(wo.max()) or 1.0)
+    a2.set_title("writes |v|  (output feature the component drives)", fontsize=10)
+    a2.set_xlabel("feature index")
+    fig.colorbar(im2, ax=a2, fraction=0.046, pad=0.04)
     fig.suptitle(component_title(
-        "Component singular-value spectra", params,
-        f"top {len(top_idx)} by effective norm"), fontsize=11)
-    figs["spectrum"] = fig
+        "Component read / write assignment", params,
+        f"{n_used}/{pd_obj.C} active; clean = a permutation in BOTH with matching columns"),
+        fontsize=11)
+    figs["assignment"] = fig
+
+    # 3. usage / attribution -- APD's own importance notion (only if provided)
+    if usage is not None:
+        freq = usage["selection_freq"].cpu().numpy()
+        counts = usage["per_example_count"].cpu().numpy().astype(int)
+        k = usage.get("k")
+        fig, (a1, a2) = plt.subplots(1, 2, figsize=(11, 4), constrained_layout=True)
+        a1.bar(np.arange(len(freq)), np.sort(freq)[::-1], color="steelblue")
+        a1.set_xlabel("component (sorted by selection frequency)")
+        a1.set_ylabel("selection frequency")
+        a1.set_title(f"batch-top-k selection frequency "
+                     f"({int((freq > 0).sum())}/{len(freq)} ever selected)", fontsize=10)
+        a1.grid(True, alpha=0.3)
+        a2.hist(counts, bins=np.arange(counts.min(), counts.max() + 2) - 0.5,
+                color="slategray")
+        if k is not None:
+            a2.axvline(k, color="crimson", ls="--", lw=1.5, label=f"target k={k}")
+            a2.legend()
+        a2.set_xlabel("components active per example")
+        a2.set_ylabel("# examples")
+        a2.set_title(f"components per example (mean {counts.mean():.1f})", fontsize=10)
+        a2.grid(True, alpha=0.3)
+        fig.suptitle(component_title(
+            "Component usage (attribution / batch-top-k)", params,
+            "APD's behavioural importance, distinct from weight-space effective norm"),
+            fontsize=11)
+        figs["usage"] = fig
+
+    # 4. faithfulness -- where the decomposition reconstructs the model (feature space)
+    model_eff = pd_obj.model.effective_matrix().cpu().numpy()
+    w_in_hat = pd_obj.reconstructed_weight("w_in")
+    w_out_hat = pd_obj.reconstructed_weight("w_out")
+    recon_eff = (pd_obj.model.project_in(w_in_hat)
+                 @ pd_obj.model.project_out(w_out_hat)).detach().cpu().numpy()
+    resid = model_eff - recon_eff
+    vmax = max(float(np.abs(model_eff).max()), float(np.abs(recon_eff).max())) or 1.0
+    rmax = float(np.abs(resid).max()) or 1.0
+    rel = float(np.linalg.norm(resid) / (np.linalg.norm(model_eff) + 1e-12))
+    fig, axs = plt.subplots(1, 3, figsize=(13, 4.6), constrained_layout=True)
+    for ax, M, ttl, vm in [(axs[0], model_eff, "model effective map", vmax),
+                           (axs[1], recon_eff, "reconstructed (Σ components)", vmax),
+                           (axs[2], resid, f"residual (max {rmax:.1e})", rmax)]:
+        im = ax.imshow(M, cmap="RdBu", vmin=-vm, vmax=vm)
+        ax.set_title(ttl, fontsize=10)
+        ax.set_xlabel("feature")
+        fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+    axs[0].set_ylabel("feature")
+    fig.suptitle(component_title(
+        "Faithfulness: model vs reconstructed effective map", params,
+        f"relative residual {rel:.1e}"), fontsize=11)
+    figs["faithfulness"] = fig
 
     return figs
 

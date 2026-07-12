@@ -61,7 +61,18 @@ def main():
     if info.get("p") and info.get("method") in ("APD", "OracleAPD"):
         k = max(1, min(pd_obj.C - 1, round(float(info["p"]) * 100)))
     params = {**info, "C": pd_obj.C, "k": k, "rank": getattr(pd_obj, "rank", None)}
-    figs = figutil.plot_components(pd_obj, top=a.top, params=params)
+    # behavioural usage: only APD/OracleAPD expose batch-top-k attributions
+    usage = None
+    if k is not None and hasattr(pd_obj, "usage_stats"):
+        import torch
+        from data import CleanDataset
+        ds = CleanDataset(n_features=pd_obj.model.n_features, p=float(info["p"]),
+                          device=a.device, seed=0)
+        xb, _ = ds.generate_batch(1024)
+        with torch.no_grad():
+            tb = pd_obj.model(xb)
+        usage = pd_obj.usage_stats(xb, tb, k)
+    figs = figutil.plot_components(pd_obj, top=a.top, params=params, usage=usage)
 
     # extra: permutation-sorted assignment (see docstring), linear to match
     assign = pd_obj.component_feature_assignment().cpu().numpy()

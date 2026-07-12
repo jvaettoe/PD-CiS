@@ -191,32 +191,77 @@ class PD(nn.Module, ABC):
         (rank-1 = one clean mechanism) as intended."""
         return torch.linalg.svdvals(self._component_weight(name, c)).detach()
 
+    def component_read_write_profiles(
+        self, c: int
+    ) -> tuple[Float[Tensor, "n_features"], Float[Tensor, "n_features"], float]:
+        """The natural rank-1 signature of a component in FEATURE space:
+          u_c -- read profile: which input feature switches the component on
+          v_c -- write profile: which output feature it drives
+          coupling -- alignment of its read-side hidden pattern with its write-side
+                      hidden pattern (sign/strength of the through-connection).
+        A rank-1 component's effective map is exactly coupling * u_c v_c^T, so (u,v)
+        losslessly capture what a 100x100 effective heatmap only implies. Taken from
+        the dominant singular directions of w_in_c / w_out_c (exact at rank=1;
+        dominant mode at rank>1), projected to feature space so it works for both
+        LinearMLP (identity projection) and EmbedMLP (folds w_e). Sign is fixed so
+        each profile's largest-magnitude entry is positive (SVD sign is arbitrary)."""
+        w_in_c, w_out_c = self.component_matrices(c)
+        Ui, Si, Vi = torch.linalg.svd(w_in_c, full_matrices=False)
+        Uo, So, Vo = torch.linalg.svd(w_out_c, full_matrices=False)
+        a_in = (Ui[:, 0] * Si[0]).unsqueeze(1)      # (d_in, 1) input direction
+        b_out = (Vo[0, :] * So[0]).unsqueeze(0)     # (1, d_out) output direction
+        u = self.model.project_in(a_in)[:, 0]       # (n_features,)
+        v = self.model.project_out(b_out)[0, :]     # (n_features,)
+        coupling = float((Vi[0, :] @ Uo[:, 0]).item())
+        u = u * (1.0 if u[u.abs().argmax()] >= 0 else -1.0)
+        v = v * (1.0 if v[v.abs().argmax()] >= 0 else -1.0)
+        return u.detach(), v.detach(), coupling
+
+    def read_write_profiles(
+        self,
+    ) -> tuple[Float[Tensor, "C n_features"], Float[Tensor, "C n_features"]]:
+        """Read and write feature profiles for ALL components, each (C, n_features).
+        The behavioural bipartite view of the decomposition: row c of `reads` is the
+        input feature(s) component c responds to, row c of `writes` the output
+        feature(s) it drives."""
+        reads, writes = [], []
+        for c in range(self.C):
+            u, v, _ = self.component_read_write_profiles(c)
+            reads.append(u)
+            writes.append(v)
+        return torch.stack(reads), torch.stack(writes)
+
     def component_metrics(self, eps: float = 1e-12, active_frac: float = 0.01) -> dict:
-        """Scalar diagnostics of how cleanly the fit decomposed:
-          - monosemanticity[c]   = top-feature share of component c's DIAGONAL mass
-                                   (1.0 = c's self-map sits on one feature)
+        """Scalar diagnostics of how cleanly the fit decomposed, from the READ and
+        WRITE feature profiles (not the |diagonal|, which conflates the two and
+        hides genuine cross-feature components):
+          - monosemanticity[c]   = sqrt(read_share * write_share) if the read and
+                                   write profiles peak on the SAME feature, else 0.
+                                   1.0 = component reads and writes one shared feature
+                                   (a clean self-feature mechanism); 0 = it reads one
+                                   feature and writes another (cross-feature), or is
+                                   diffuse.
           - components_used       = # components whose FEATURE-SPACE effective map is
-                                   >= active_frac of the largest. Thresholding on the
-                                   effective norm (not raw weight norm) is deliberate:
-                                   raw norms can be near-uniform even when most
-                                   components do no feature-space work, which made the
-                                   old norm threshold report a misleading '100/100'.
-          - features_covered      = # distinct features that are some used
-                                   component's diagonal argmax
+                                   >= active_frac of the largest (weight-space; label
+                                   as such -- APD's behavioural importance is
+                                   attribution/usage, surfaced separately).
+          - features_covered      = # distinct features owned (read==write peak) by a
+                                   used component
           - mean_monosemanticity  = mean monosemanticity over used components
-          - mean_diagonal_share   = mean, over used components, of the fraction of
-                                   |effective| mass on the diagonal (low => the used
-                                   components mostly do off-diagonal/superposed work,
-                                   so monosemanticity understates real activity)
+          - mean_diagonal_share   = mean |effective| diagonal share over used comps
         Returned per-component AND aggregated so both can be stored."""
-        assign = self.component_feature_assignment()          # (C, n_features) = |diag|
+        reads, writes = self.read_write_profiles()            # (C, n_features) each
         eff_norm = self.component_effective_norms()           # (C,) feature-space magnitude
         diag_share = self.component_diagonal_shares(eps)      # (C,)
-        total = assign.sum(dim=1) + eps
-        peak = assign.max(dim=1).values
-        mono = peak / total                                   # (C,)
+        ru, wv = reads.abs(), writes.abs()
+        read_share = ru.max(dim=1).values / (ru.sum(dim=1) + eps)
+        write_share = wv.max(dim=1).values / (wv.sum(dim=1) + eps)
+        owned = ru.argmax(dim=1)
+        aligned = owned == wv.argmax(dim=1)
+        mono = torch.where(aligned, (read_share * write_share).sqrt(),
+                           torch.zeros_like(read_share))       # (C,)
         used = eff_norm > active_frac * (eff_norm.max() + eps)
-        covered = len(set(assign.argmax(dim=1)[used].tolist())) if used.any() else 0
+        covered = len(set(owned[used & aligned].tolist())) if (used & aligned).any() else 0
         # Participation ratio (Σw)^2 / Σw^2 on the effective norms: a dominance-robust
         # "effective number of components". Unlike components_used (a >1%-of-max count,
         # which one huge component can drag down to ~2), this is ~C when the mass is
@@ -331,6 +376,23 @@ class APD(PD):
         mask = torch.zeros(B * C, device=attr.device)
         mask[idx] = 1.0
         return mask.reshape(B, C)
+
+    def usage_stats(
+        self, x: Float[Tensor, "batch n_features"],
+        target_output: Float[Tensor, "batch n_features"], k: int,
+    ) -> dict:
+        """Behavioural usage of the components on a batch: the batch-top-k selection
+        APD actually makes (its native importance notion, absent from the weight-
+        space metrics). Returns:
+          attr (B,C), mask (B,C),
+          selection_freq (C,)   = fraction of examples that select each component,
+          per_example_count (B,)= # components active per example (should center on k).
+        Lets the plot layer show usage without reaching into training internals."""
+        attr = self._attributions(x, target_output)   # runs its own autograd, returns detached
+        mask = self._batch_topk_mask(attr, k)
+        return {"attr": attr, "mask": mask, "k": k,
+                "selection_freq": mask.mean(dim=0),
+                "per_example_count": mask.sum(dim=1)}
 
     def simplicity_loss(
         self, mask: Float[Tensor, "batch C"], p: float = 1.0, eps: float = 1e-16
