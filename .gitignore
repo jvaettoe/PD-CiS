@@ -4,3 +4,4 @@ __pycache__/
 checkpoints/
 figures/
 results/
+.DS_Store
