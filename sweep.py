@@ -47,7 +47,8 @@ def _demb_tok(d_emb: int | None) -> str:
     return "NA" if d_emb is None else str(d_emb)
 
 
-def iter_model_specs(smoke: bool = False, n_exps=None, drop_demb=None, d_mlp=D_MLP):
+def iter_model_specs(smoke: bool = False, n_exps=None, drop_demb=None, d_mlp=D_MLP,
+                     no_linear=False):
     """Yield one spec dict per model to train: EmbedMLP over n_exp x p x d_emb,
     plus a LinearMLP baseline over n_exp x p (d_emb inapplicable -> None).
     n_exps overrides the exponent list AND its order (used to reprioritise which
@@ -68,6 +69,8 @@ def iter_model_specs(smoke: bool = False, n_exps=None, drop_demb=None, d_mlp=D_M
             "model_kwargs": {"n_features": N_FEATURES, "d_emb": d_emb, "d_mlp": d_mlp},
             "str_p": str_p, "n_exp": n_exp,
         }
+    if no_linear:
+        return
     for n_exp, str_p in itertools.product(n_exps, ps):
         yield {
             "model": "LinearMLP", "model_cls": LinearMLP, "d_emb": None,
@@ -219,7 +222,7 @@ def _emit_sweep_summaries(methods, smoke, n_exps=None):
 def main(*, smoke=False, methods=decomp_fit.METHODS, device="cpu",
          base_steps=10_000, force=False, n_exps=None, models_only=False,
          no_train=False, tag=None, steps_scale=1.0, batch_override=None,
-         drop_demb=None, d_mlp=D_MLP):
+         drop_demb=None, d_mlp=D_MLP, no_linear=False):
     assert K < C, f"K ({K}) must be < C ({C}) or minimality is trivial"
     if d_mlp != D_MLP and not tag:
         raise SystemExit(f"--d-mlp {d_mlp} != default {D_MLP}: run_id does not encode "
@@ -229,7 +232,8 @@ def main(*, smoke=False, methods=decomp_fit.METHODS, device="cpu",
     if tag:  # namespace outputs so e.g. a cheap preliminary pass (results/prelim)
         results_io.set_tag(tag)   # never clobbers the full detailed run
         figutil.set_tag(tag)
-    specs = list(iter_model_specs(smoke, n_exps=n_exps, drop_demb=drop_demb, d_mlp=d_mlp))
+    specs = list(iter_model_specs(smoke, n_exps=n_exps, drop_demb=drop_demb, d_mlp=d_mlp,
+                                  no_linear=no_linear))
     order = n_exps if n_exps is not None else (SMOKE_N_EXPS if smoke else N_EXPS)
     mode = "MODELS-ONLY" if models_only else ("NO-TRAIN" if no_train else "")
     print(f"===== decomposition sweep ({'SMOKE' if smoke else 'FULL'}) =====")
@@ -289,9 +293,11 @@ if __name__ == "__main__":
     ap.add_argument("--d-mlp", type=int, default=D_MLP, dest="d_mlp",
                     help=f"hidden width (default {D_MLP}); run_id does not encode it, so a "
                          f"non-default value REQUIRES --tag (e.g. --d-mlp 100 --tag dmlp100)")
+    ap.add_argument("--no-linear", action="store_true", dest="no_linear",
+                    help="skip the LinearMLP baselines (decompose only EmbedMLP cells)")
     args = ap.parse_args()
     main(smoke=args.smoke, methods=args.methods, device=args.device,
          base_steps=args.base_steps, force=args.force, n_exps=args.n_exps,
          models_only=args.models_only, no_train=args.no_train, tag=args.tag,
          steps_scale=args.steps_scale, batch_override=args.batch_override,
-         drop_demb=args.drop_demb, d_mlp=args.d_mlp)
+         drop_demb=args.drop_demb, d_mlp=args.d_mlp, no_linear=args.no_linear)
