@@ -1,24 +1,32 @@
 """Benchmark trained-model FINAL LOSS (and loss curves) across d_emb, for a given
-loss exponent n:  EmbedMLP d_mlp=50  vs  EmbedMLP d_mlp=100  vs  LinearMLP d_mlp=50.
+loss exponent n:  EmbedMLP d_mlp=50  vs  EmbedMLP d_mlp=100  vs  LinearMLP d_mlp={50,100}.
 
 Reads cached checkpoints directly (each stores the full `losses` curve).
   ./.venv/bin/python bench_final_loss.py --n 4
+
+"final loss" = mean over the last TAIL_FRAC of steps (see robust_final), NOT losses[-1]
+(one minibatch sample, relstd ~1 at low p). CAVEAT: loss = E[|err|^n], so its MAGNITUDE
+is set by the exponent n -- do NOT compare loss values across different n; compare only
+within a fixed n (all figures here are per-n).
 """
 import argparse
 import glob
 import os
-import re
 
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-import numpy as np
 import torch
+
+from results_io import _fmt_n as _ntok   # canonical n-token used in checkpoint filenames
 
 CKPT_DIR = "checkpoints"
 OUT_DIR = "figures/model_benchmark"
+N_FEATURES = 100
 PS = [0.001, 0.01, 0.1, 0.5, 0.8]
 DEMBS = [20, 50, 100, 200, 1000]
+TAIL_FRAC = 0.05   # "final loss" = mean over last frac of steps (LR~0 there, so iid draws
+TAIL_MIN = 500     # of a converged model) -> low-variance estimate, not one noisy minibatch
 
 SERIES = {  # label -> (model_class, d_mlp, colour, marker)
     "EmbedMLP d_mlp=50":  ("EmbedMLP", 50,  "#1f77b4", "o"),
@@ -32,22 +40,26 @@ BASELINES = {  # label -> (model_class, d_mlp, colour); LinearMLP has no d_emb -
 
 def load(path):
     ck = torch.load(path, map_location="cpu", weights_only=False)
-    return ck["losses"], ck["model_config"], ck["dataset_config"]
+    return ck["losses"], ck["model_config"], ck["dataset_config"], ck["model_class"]
+
+
+def robust_final(losses):
+    """Final loss as the mean over the last TAIL_FRAC of steps. losses[-1] is one
+    minibatch sample (relstd ~1 at low p -> ~2x swings); with cosine LR annealed to
+    ~0 the tail is iid draws of a converged model, so its mean is a stable estimate."""
+    k = min(len(losses), max(TAIL_MIN, int(len(losses) * TAIL_FRAC)))
+    tail = losses[-k:]
+    return sum(tail) / len(tail)
 
 
 def scan(n):
-    """-> {(model_class, d_mlp, d_emb_or_None, p): (losses, final)}"""
+    """-> {(model_class, d_mlp, d_emb_or_None, p): (losses, final)}; n_features-filtered."""
     out = {}
-    for path in glob.glob(os.path.join(CKPT_DIR, f"ncc_*_n{_ntok(n)}_s42.pt")):
-        losses, mc, dc = load(path)
-        cls = "EmbedMLP" if "EmbedMLP" in os.path.basename(path) else "LinearMLP"
+    for path in glob.glob(os.path.join(CKPT_DIR, f"ncc_*_n_features{N_FEATURES}_*_n{_ntok(n)}_s42.pt")):
+        losses, mc, dc, cls = load(path)
         key = (cls, mc.get("d_mlp"), mc.get("d_emb"), round(dc["p"], 6))
-        out[key] = (losses, losses[-1])
+        out[key] = (losses, robust_final(losses))
     return out
-
-
-def _ntok(n):
-    return str(int(n)) if float(n).is_integer() else str(n)
 
 
 def plot_final_vs_demb(data, n):
@@ -85,7 +97,7 @@ def plot_curves(data, n, demb=200):
     """Loss curves at one representative d_emb, per p; LinearMLP overlaid."""
     fig, axes = plt.subplots(1, len(PS), figsize=(4 * len(PS), 4.2), sharey=True)
     for ax, p in zip(axes, PS):
-        for label, (cls, dmlp, colour, marker) in SERIES.items():
+        for label, (cls, dmlp, colour, _) in SERIES.items():   # marker unused for curves
             v = data.get((cls, dmlp, demb, p))
             if v:
                 ax.plot(v[0], color=colour, lw=1.3, label=f"{label}")
@@ -125,7 +137,7 @@ def plot_loss_vs_params(data, n):
             pts = sorted((n_trainable(cls, dmlp, d), data[(cls, dmlp, d, p)][1], d)
                          for d in DEMBS if (cls, dmlp, d, p) in data)
             if pts:
-                xs, ys, ds = zip(*pts)
+                xs, ys, _ = zip(*pts)
                 ax.plot(xs, ys, marker=marker, color=colour, label=label)
                 for x, y, d in pts:  # annotate each point with its d_emb
                     ax.annotate(f"{d}", (x, y), fontsize=6, color=colour,
