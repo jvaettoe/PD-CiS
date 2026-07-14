@@ -22,6 +22,7 @@ import sys
 
 import matplotlib
 matplotlib.use("Agg")
+import numpy as np
 import torch
 
 import decomp_fit
@@ -41,6 +42,22 @@ def k_for(p: str, C: int) -> int:
     """Batch-top-k budget = round(p * n_features), clamped to [1, C-1]
     (matches sweep.k_for / plot_components)."""
     return max(1, min(C - 1, round(float(p) * 100)))
+
+
+def residual_frobenius(pd_obj):
+    """Frobenius norm of the effective feature->feature map residual (same quantity
+    the per-cell 'faithfulness' view renders): raw ‖W_model - W_recon‖_F and the
+    relative ‖resid‖_F / ‖W_model‖_F. W_recon sums ALL components' weights and
+    projects them the same way the model does (project_in/out fold in w_e)."""
+    model_eff = pd_obj.model.effective_matrix().detach().cpu().numpy()
+    w_in_hat = pd_obj.reconstructed_weight("w_in")
+    w_out_hat = pd_obj.reconstructed_weight("w_out")
+    recon_eff = (pd_obj.model.project_in(w_in_hat)
+                 @ pd_obj.model.project_out(w_out_hat)).detach().cpu().numpy()
+    resid = model_eff - recon_eff
+    raw = float(np.linalg.norm(resid))
+    rel = raw / (float(np.linalg.norm(model_eff)) + 1e-12)
+    return raw, rel
 
 
 def build_usage(pd_obj, p: str, k: int, device="cpu"):
@@ -95,9 +112,34 @@ def render_cross_p(device="cpu"):
     print(f"[2/2] cross-p figures: {len(DMLPS)}")
 
 
+def render_faithfulness_vs_p(device="cpu"):
+    """One figure, both widths: effective-map Frobenius residual vs p."""
+    out_dir = os.path.join(figutil.FIG_ROOT, figutil.n_seg(N_EXP), "components")
+    os.makedirs(out_dir, exist_ok=True)
+    series = {}
+    for d_mlp in DMLPS:
+        pts = []
+        for p in PS:
+            run_id = results_io.make_run_id(model=MODEL, d_emb=DEMB, d_mlp=d_mlp,
+                                            p=p, n_exp=N_EXP, method=METHOD)
+            pd_obj = decomp_fit.load_decomposition(run_id, device=device)
+            raw, rel = residual_frobenius(pd_obj)
+            pts.append((float(p), raw, rel))
+        series[d_mlp] = pts
+    params = {"model": MODEL, "d_emb": DEMB, "n_exp": N_EXP, "method": METHOD}
+    fig = figutil.plot_faithfulness_vs_p(series, params=params)
+    out = os.path.join(out_dir,
+                       f"{MODEL}_demb{DEMB}_n{results_io._fmt_n(N_EXP)}"
+                       f"_{METHOD}_faithfulness_vs_p.png")
+    fig.savefig(out, dpi=130, bbox_inches="tight")
+    figutil.plt.close(fig)
+    print(f"[3/3] faithfulness-vs-p figure: {out}")
+
+
 def main():
     render_per_cell()
     render_cross_p()
+    render_faithfulness_vs_p()
     print(f"\nAll component figures under "
           f"{os.path.join(figutil.FIG_ROOT, figutil.n_seg(N_EXP), 'components')}")
 

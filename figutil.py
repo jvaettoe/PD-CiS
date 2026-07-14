@@ -315,6 +315,45 @@ def plot_components_vs_p(entries: list, *, params: dict | None = None):
     return fig
 
 
+def plot_faithfulness_vs_p(series: dict, *, params: dict | None = None):
+    """How well the decomposition reconstructs the model's linearised feature->feature
+    map, as a function of sparsity p, one line per model width. `series` maps
+    d_mlp -> list of (p_float, raw_resid, rel_resid) where raw_resid = ‖W_model -
+    W_recon‖_F on the effective matrix and rel_resid = raw / ‖W_model‖_F (the same
+    residual the per-cell 'faithfulness' view shows, summarised across p). Two panels:
+      left  = raw Frobenius residual ‖resid‖_F  (absolute reconstruction error)
+      right = relative residual ‖resid‖_F / ‖W_model‖_F  (dimensionless, comparable
+              across widths whose effective maps differ in magnitude).
+    This is the WEIGHT-SPACE reconstruction of the linear map, distinct from the
+    behavioural per-example 'faithful' loss term stored in summary.csv."""
+    import numpy as np
+
+    fig, (a_raw, a_rel) = plt.subplots(1, 2, figsize=(11, 4.4), constrained_layout=True)
+    for d_mlp in sorted(series):
+        pts = sorted(series[d_mlp])
+        ps = [p for p, _, _ in pts]
+        raw = [r for _, r, _ in pts]
+        rel = [q for _, _, q in pts]
+        a_raw.plot(ps, raw, marker="o", label=f"d_mlp={d_mlp}")
+        a_rel.plot(ps, rel, marker="o", label=f"d_mlp={d_mlp}")
+    for ax, ylab, ttl in [
+        (a_raw, "‖resid‖_F", "raw Frobenius residual"),
+        (a_rel, "‖resid‖_F / ‖W_model‖_F", "relative Frobenius residual"),
+    ]:
+        ax.set_xscale("log")
+        ax.set_yscale("log")
+        ax.set_xlabel("data sparsity p (log)")
+        ax.set_ylabel(ylab)
+        ax.set_title(ttl, fontsize=10)
+        ax.grid(True, alpha=0.3, which="both")
+        ax.legend(fontsize=9)
+    fig.suptitle(component_title(
+        "Reconstruction faithfulness vs sparsity p", params,
+        "effective feature->feature map residual (lower = more faithful)"),
+        fontsize=12)
+    return fig
+
+
 def save_component_figs(figs: dict, run_id: str, *, n_group=None,
                         k=None, rank=None, dpi: int = 130, close: bool = True) -> str:
     """Save the plot_components() figures with descriptive, model-identifying file
