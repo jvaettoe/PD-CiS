@@ -60,6 +60,24 @@ def residual_frobenius(pd_obj):
     return raw, rel
 
 
+def behavioural_faithfulness(pd_obj, p: str, device="cpu", batch=4096):
+    """Output-space faithfulness of the FULL decomposition: run the model's forward
+    with every decomposed weight replaced by the sum of ALL C components
+    (pd_obj.forward_dense) and compare to the model's own output on a fresh batch.
+    Returns (out_mse, rel_out_err). Fresh compute (seed=0), not the noisy last
+    training minibatch. Distinct from residual_frobenius (weight-space effective map)."""
+    ds = CleanDataset(n_features=pd_obj.model.n_features, p=float(p),
+                      device=device, seed=0)
+    xb, _ = ds.generate_batch(batch)
+    with torch.no_grad():
+        target = pd_obj.model(xb)
+        pred = pd_obj.forward_dense(xb)
+        diff = (pred - target)
+        out_mse = float((diff ** 2).mean().item())
+        rel = float((diff.norm() / (target.norm() + 1e-12)).item())
+    return out_mse, rel
+
+
 def build_usage(pd_obj, p: str, k: int, device="cpu"):
     """APD behavioural usage on a fresh batch (same recipe as plot_components)."""
     ds = CleanDataset(n_features=pd_obj.model.n_features, p=float(p),
@@ -136,10 +154,36 @@ def render_faithfulness_vs_p(device="cpu"):
     print(f"[3/3] faithfulness-vs-p figure: {out}")
 
 
+def render_behavioural_faithfulness_vs_p(device="cpu"):
+    """One figure, both widths: output-space error of the Σ-all-components forward
+    vs the model, as a function of p."""
+    out_dir = os.path.join(figutil.FIG_ROOT, figutil.n_seg(N_EXP), "components")
+    os.makedirs(out_dir, exist_ok=True)
+    series = {}
+    for d_mlp in DMLPS:
+        pts = []
+        for p in PS:
+            run_id = results_io.make_run_id(model=MODEL, d_emb=DEMB, d_mlp=d_mlp,
+                                            p=p, n_exp=N_EXP, method=METHOD)
+            pd_obj = decomp_fit.load_decomposition(run_id, device=device)
+            mse, rel = behavioural_faithfulness(pd_obj, p, device)
+            pts.append((float(p), mse, rel))
+        series[d_mlp] = pts
+    params = {"model": MODEL, "d_emb": DEMB, "n_exp": N_EXP, "method": METHOD}
+    fig = figutil.plot_behavioural_faithfulness_vs_p(series, params=params)
+    out = os.path.join(out_dir,
+                       f"{MODEL}_demb{DEMB}_n{results_io._fmt_n(N_EXP)}"
+                       f"_{METHOD}_behavioural_faithfulness_vs_p.png")
+    fig.savefig(out, dpi=130, bbox_inches="tight")
+    figutil.plt.close(fig)
+    print(f"[4/4] behavioural-faithfulness-vs-p figure: {out}")
+
+
 def main():
     render_per_cell()
     render_cross_p()
     render_faithfulness_vs_p()
+    render_behavioural_faithfulness_vs_p()
     print(f"\nAll component figures under "
           f"{os.path.join(figutil.FIG_ROOT, figutil.n_seg(N_EXP), 'components')}")
 

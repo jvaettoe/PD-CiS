@@ -354,6 +354,42 @@ def plot_faithfulness_vs_p(series: dict, *, params: dict | None = None):
     return fig
 
 
+def plot_behavioural_faithfulness_vs_p(series: dict, *, params: dict | None = None):
+    """How well the FULL decomposition (sum of all C components) reproduces the
+    model's OUTPUTS, as a function of sparsity p, one line per width. This is the
+    BEHAVIOURAL (output-space) faithfulness -- distinct from both the weight-space
+    effective-map residual (plot_faithfulness_vs_p) and the stored `faithful` loss
+    term (a raw-weight MSE). `series` maps d_mlp -> [(p_float, out_mse, rel_out_err)]
+    where out_mse = mean((forward_dense(x) - model(x))^2) and rel_out_err =
+    ‖forward_dense(x) - model(x)‖_F / ‖model(x)‖_F on a fresh batch. Two panels:
+      left  = output MSE            (absolute behavioural error)
+      right = relative output error (dimensionless, comparable across widths)."""
+    fig, (a_mse, a_rel) = plt.subplots(1, 2, figsize=(11, 4.4), constrained_layout=True)
+    for d_mlp in sorted(series):
+        pts = sorted(series[d_mlp])
+        ps = [p for p, _, _ in pts]
+        mse = [m for _, m, _ in pts]
+        rel = [r for _, _, r in pts]
+        a_mse.plot(ps, mse, marker="o", label=f"d_mlp={d_mlp}")
+        a_rel.plot(ps, rel, marker="o", label=f"d_mlp={d_mlp}")
+    for ax, ylab, ttl in [
+        (a_mse, "mean (ŷ − y)²", "output MSE"),
+        (a_rel, "‖ŷ − y‖_F / ‖y‖_F", "relative output error"),
+    ]:
+        ax.set_xscale("log")
+        ax.set_yscale("log")
+        ax.set_xlabel("data sparsity p (log)")
+        ax.set_ylabel(ylab)
+        ax.set_title(ttl, fontsize=10)
+        ax.grid(True, alpha=0.3, which="both")
+        ax.legend(fontsize=9)
+    fig.suptitle(component_title(
+        "Behavioural faithfulness vs sparsity p", params,
+        "output of Σ-all-components forward vs model (lower = more faithful)"),
+        fontsize=12)
+    return fig
+
+
 def save_component_figs(figs: dict, run_id: str, *, n_group=None,
                         k=None, rank=None, dpi: int = 130, close: bool = True) -> str:
     """Save the plot_components() figures with descriptive, model-identifying file
