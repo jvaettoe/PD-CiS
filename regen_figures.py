@@ -1,16 +1,17 @@
-"""Regenerate all derived figures for a results tag straight from its curve
+"""Regenerate all derived figures straight from the topical results tree's curve
 JSONs + summary.csv -- no pod / no models needed (figures are derived data).
 
-Produces, under figures/<tag>/:
+Produces, under figures/n<n>/:
   - loss_curves/<method>/...   one per run (from each curve JSON)
   - sweep_summary/...          final-loss-vs-d_emb, per (method, n_exp), from summary.csv
-  - composites/...             per (model, d_emb, n_exp) cell, all methods present
-                               (delegates to plot_prelim.py)
+  - composites/...             per (model, d_emb, d_mlp, n_exp) cell, all methods
+                               present (delegates to plot_prelim.py)
 
 Model-view figures are NOT regenerated here -- they need the trained model, not
 just curves. Rerun the sweep (or a model-figure pass) once checkpoints are local.
 
-  ./.venv/bin/python regen_figures.py --tag gpu
+  ./.venv/bin/python regen_figures.py            # all exponents
+  ./.venv/bin/python regen_figures.py --n 4      # only results/n4
 """
 import argparse
 import glob
@@ -34,23 +35,24 @@ def _demb_tok(d_emb) -> str:
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--tag", default="gpu", help="results/figures namespace")
+    ap.add_argument("--n", type=float, default=None, dest="n_exp",
+                    help="restrict to one loss exponent (default: every results/n*)")
     args = ap.parse_args()
-    results_io.set_tag(args.tag)
-    figutil.set_tag(args.tag)
 
-    curve_files = sorted(glob.glob(os.path.join(results_io.CURVES_DIR, "*.json")))
+    glob_root = (results_io._n_dir(args.n_exp) if args.n_exp is not None
+                 else os.path.join(results_io.RESULTS_DIR, "n*"))
+    curve_files = sorted(glob.glob(os.path.join(glob_root, "curves", "*.json")))
     if not curve_files:
-        sys.exit(f"No curve JSONs under results/{args.tag}/curves — nothing to do.")
+        sys.exit(f"No curve JSONs under {glob_root}/curves — nothing to do.")
 
     # ---- 1. per-run loss-curve figures ----
-    cells = {}  # (model, demb_tok, ntok) -> set(methods)
+    cells = {}  # (model, demb_tok, d_mlp, ntok) -> set(methods)
     n_loss = 0
     for f in curve_files:
         blob = json.load(open(f))
         cfg, curves = blob["config"], blob["curves"]
         model, method = cfg["model"], cfg["method"]
-        demb, p = cfg.get("d_emb"), cfg["p"]
+        demb, dmlp, p = cfg.get("d_emb"), cfg.get("d_mlp"), cfg["p"]
         ntok = results_io._fmt_n(float(cfg["n_exp"]))
         k = cfg.get("k")
         dtok = _demb_tok(demb)
@@ -59,23 +61,23 @@ def main():
         k_tok = f"_k{k}" if k not in (None, "") and method in ("APD", "OracleAPD") else ""
         figutil.save_fig(
             fig, os.path.join("loss_curves", method),
-            f"{model}_demb{dtok}_p{p}_n{ntok}_{method}{k_tok}_loss.png",
+            f"{model}_demb{dtok}_dmlp{dmlp}_p{p}_n{ntok}_{method}{k_tok}_loss.png",
             f"{method} loss curves",
             n_group=ntok,
-            model=model, d_emb=demb, p=p, n_exp=cfg["n_exp"],
+            model=model, d_emb=demb, d_mlp=dmlp, p=p, n_exp=cfg["n_exp"],
             method=method, C=cfg.get("C"), k=k,
         )
         n_loss += 1
-        cells.setdefault((model, dtok, ntok), set()).add(method)
+        cells.setdefault((model, dtok, dmlp, ntok), set()).add(method)
     print(f"[1/3] per-run loss-curve PNGs: {n_loss}")
 
     # ---- 2. sweep-summary figures (final loss vs d_emb, per method x n_exp) ----
-    summary = results_io.load_summary()
+    ntoks = sorted({nt for (_, _, _, nt) in cells}, key=float)
     methods = sorted({m for s in cells.values() for m in s})
-    ntoks = sorted({nt for (_, _, nt) in cells}, key=float)
     n_sweep = 0
-    for method in methods:
-        for ntok in ntoks:
+    for ntok in ntoks:
+        summary = results_io.load_summary(ntok)
+        for method in methods:
             fig = figutil.plot_sweep_summary(summary, method=method, n_exp=float(ntok))
             figutil.save_fig(
                 fig, "sweep_summary",
@@ -89,9 +91,9 @@ def main():
 
     # ---- 3. per-cell composites (delegate to plot_prelim.py) ----
     n_comp = 0
-    for (model, dtok, ntok), meths in sorted(cells.items()):
-        cmd = [sys.executable, "plot_prelim.py", "--tag", args.tag,
-               "--model", model, "--n", ntok,
+    for (model, dtok, dmlp, ntok), meths in sorted(cells.items(), key=lambda kv: str(kv[0])):
+        cmd = [sys.executable, "plot_prelim.py",
+               "--model", model, "--d-mlp", str(dmlp), "--n", ntok,
                "--methods", *sorted(meths)]
         if model != "LinearMLP":
             cmd += ["--demb", dtok]
@@ -99,7 +101,8 @@ def main():
         if r.returncode == 0:
             n_comp += 1
         else:
-            print(f"   composite {model} demb={dtok} n={ntok} FAILED: {r.stderr.strip()[:200]}")
+            print(f"   composite {model} demb={dtok} dmlp={dmlp} n={ntok} "
+                  f"FAILED: {r.stderr.strip()[:200]}")
     print(f"[3/3] composite PNGs: {n_comp}")
     print(f"\nAll figures under {figutil.FIG_ROOT}")
 

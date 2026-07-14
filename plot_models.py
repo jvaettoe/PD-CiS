@@ -45,6 +45,7 @@ def main():
         model_cls = meta["model_class"]
         is_embed = model_cls == "EmbedMLP"
         d_emb = meta["model_config"].get("d_emb")
+        d_mlp = meta["model_config"].get("d_mlp")
         demb_tok = str(d_emb) if is_embed else "NA"
 
         figs = figutil.plot_model_views(model, is_embed=is_embed)   # weights/effective/bars
@@ -52,11 +53,11 @@ def main():
         for view, fig in figs.items():
             figutil.save_fig(
                 fig, os.path.join("model_views", model_cls),
-                f"{model_cls}_demb{demb_tok}_p{p_tok}_n{n_tok}_{view}.png",
+                f"{model_cls}_demb{demb_tok}_dmlp{d_mlp}_p{p_tok}_n{n_tok}_{view}.png",
                 f"{model_cls} {view} (feature space)",
                 n_group=n_tok,
                 model=model_cls, d_emb=(d_emb if is_embed else None),
-                p=p_tok, n_exp=n_tok,
+                d_mlp=d_mlp, p=p_tok, n_exp=n_tok,
             )
         n += 1
         print(f"  {base}")

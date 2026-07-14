@@ -240,6 +240,81 @@ def plot_components(pd_obj, *, top: int = 16, params: dict | None = None,
     return figs
 
 
+def plot_components_vs_p(entries: list, *, params: dict | None = None):
+    """Cross-sparsity comparison for ONE model width: how the decomposition's
+    components change as the data sparsity p sweeps. ROWS = p (each `entries` item),
+    COLUMNS = [reads |u| assignment | writes |v| assignment | usage selection-freq].
+
+    Each entry is a dict {p, k, pd_obj, usage} (usage from pd_obj.usage_stats, or
+    None). Reuses the SAME primitives as plot_components -- read_write_profiles(),
+    component_effective_norms() (row sort key), component_metrics() (row scalars) --
+    so the per-p rows read exactly like the per-cell 'assignment'/'usage' views,
+    just stacked for comparison. Heatmap colour is normalised PER ROW (each p's own
+    max), since read/write magnitudes vary by orders of magnitude across p; the
+    STRUCTURE (which feature each component reads/writes), not the scale, is what
+    changes with p. Returns the Figure."""
+    import numpy as np
+
+    nrow = len(entries)
+    fig, axes = plt.subplots(nrow, 3, figsize=(15, 3.1 * nrow + 0.8),
+                             squeeze=False, constrained_layout=True)
+    for i, e in enumerate(entries):
+        pd_obj, k = e["pd_obj"], e.get("k")
+        reads, writes = pd_obj.read_write_profiles()
+        reads, writes = np.abs(reads.cpu().numpy()), np.abs(writes.cpu().numpy())
+        eff_norm = pd_obj.component_effective_norms().cpu().numpy()
+        order = np.argsort(eff_norm)[::-1]
+        ro, wo = reads[order], writes[order]
+        m = pd_obj.component_metrics()
+
+        a_r, a_w, a_u = axes[i]
+        im_r = a_r.imshow(ro, aspect="auto", cmap="magma", vmin=0.0,
+                          vmax=float(ro.max()) or 1.0)
+        fig.colorbar(im_r, ax=a_r, fraction=0.046, pad=0.04)
+        im_w = a_w.imshow(wo, aspect="auto", cmap="magma", vmin=0.0,
+                          vmax=float(wo.max()) or 1.0)
+        fig.colorbar(im_w, ax=a_w, fraction=0.046, pad=0.04)
+
+        # row identity + scalar decomposition metrics, on the leftmost y-label
+        a_r.set_ylabel(f"p={e['p']}  (k={k})\n"
+                       f"eff_count={m['effective_count']:.0f}\n"
+                       f"mono={m['mean_monosemanticity']:.2f}\n"
+                       f"cov={m['features_covered']}/{ro.shape[1]}",
+                       fontsize=9)
+        for ax in (a_r, a_w):
+            ax.set_yticks([])
+
+        # usage: batch-top-k selection frequency (APD's own importance), sorted
+        usage = e.get("usage")
+        if usage is not None:
+            freq = np.sort(usage["selection_freq"].cpu().numpy())[::-1]
+            a_u.bar(np.arange(len(freq)), freq, color="steelblue", width=1.0)
+            a_u.set_ylabel("selection freq", fontsize=8)
+            a_u.set_xlim(-0.5, len(freq) - 0.5)
+            a_u.grid(True, alpha=0.3)
+            ever = int((usage["selection_freq"].cpu().numpy() > 0).sum())
+            a_u.text(0.97, 0.92, f"{ever}/{pd_obj.C} used", transform=a_u.transAxes,
+                     ha="right", va="top", fontsize=8)
+        else:
+            a_u.axis("off")
+
+        if i == 0:
+            a_r.set_title("reads |u|  (input feature that activates the component)",
+                          fontsize=10)
+            a_w.set_title("writes |v|  (output feature it drives)", fontsize=10)
+            a_u.set_title("batch-top-k selection frequency", fontsize=10)
+        if i == nrow - 1:
+            a_r.set_xlabel("feature index")
+            a_w.set_xlabel("feature index")
+            a_u.set_xlabel("component (sorted by selection freq)")
+
+    fig.suptitle(component_title(
+        "Components vs sparsity p  (rows = p, effective-norm-sorted)", params,
+        "same model width; how read/write structure & usage change with p"),
+        fontsize=12)
+    return fig
+
+
 def save_component_figs(figs: dict, run_id: str, *, n_group=None,
                         k=None, rank=None, dpi: int = 130, close: bool = True) -> str:
     """Save the plot_components() figures with descriptive, model-identifying file

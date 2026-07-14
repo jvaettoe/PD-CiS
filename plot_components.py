@@ -1,10 +1,10 @@
-"""Render the component views for a SAVED decomposition (results/<tag>/decomps/
+"""Render the component views for a SAVED decomposition (results/n<n>/decomps/
 <run_id>.pt, written by the sweep). Feature-space per-component maps + a
 component->feature assignment heatmap (norm-sorted and permutation-sorted) +
 singular-value spectrum, plus scalar purity/coverage metrics.
 
-  ./.venv/bin/python plot_components.py --tag gpu --demb 200 --p 0.1 --n 4 --method APD
-  ./.venv/bin/python plot_components.py --tag gpu --run EmbedMLP_demb200_p0.1_n4_APD
+  ./.venv/bin/python plot_components.py --demb 200 --d-mlp 100 --p 0.1 --n 4 --method APD
+  ./.venv/bin/python plot_components.py --run EmbedMLP_demb200_dmlp100_p0.1_n4_APD
 """
 import argparse
 import os
@@ -21,7 +21,7 @@ import decomp_fit
 
 def build_run_id(a) -> str:
     demb = None if a.model == "LinearMLP" else a.demb
-    return results_io.make_run_id(model=a.model, d_emb=demb, p=a.p,
+    return results_io.make_run_id(model=a.model, d_emb=demb, d_mlp=a.d_mlp, p=a.p,
                                   n_exp=a.n_exp, method=a.method)
 
 
@@ -36,10 +36,11 @@ def permutation_order(assign: np.ndarray) -> np.ndarray:
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--tag", default="gpu")
     ap.add_argument("--run", default=None, help="explicit run_id (else built from the flags below)")
     ap.add_argument("--model", default="EmbedMLP")
     ap.add_argument("--demb", type=int, default=200)
+    ap.add_argument("--d-mlp", type=int, default=50, dest="d_mlp",
+                    help="hidden width (first-class in the run_id)")
     ap.add_argument("--p", default="0.1")
     ap.add_argument("--n", type=float, default=2.0, dest="n_exp")
     ap.add_argument("--method", default="APD", choices=["APD", "OracleAPD", "SPD"])
@@ -47,8 +48,6 @@ def main():
     ap.add_argument("--device", default="cpu")
     a = ap.parse_args()
 
-    results_io.set_tag(a.tag)
-    figutil.set_tag(a.tag)
     run_id = a.run or build_run_id(a)
     pd_obj = decomp_fit.load_decomposition(run_id, device=a.device)
 

@@ -53,8 +53,8 @@ def iter_model_specs(smoke: bool = False, n_exps=None, drop_demb=None, d_mlp=D_M
     plus a LinearMLP baseline over n_exp x p (d_emb inapplicable -> None).
     n_exps overrides the exponent list AND its order (used to reprioritise which
     rows run first); drop_demb excludes those embedding dims (e.g. the expensive
-    d_emb=1000 in a fast preliminary); d_mlp overrides the hidden width (run_id does
-    NOT encode d_mlp, so a non-default d_mlp MUST be namespaced with --tag).
+    d_emb=1000 in a fast preliminary); d_mlp overrides the hidden width (now
+    first-class in the run_id, so distinct widths never collide -- no --tag needed).
     Everything is resumable so done cells skip."""
     if n_exps is None:
         n_exps = SMOKE_N_EXPS if smoke else N_EXPS
@@ -85,15 +85,16 @@ def _emit_model_figures(model, spec):
     is_embed = spec["model"] == "EmbedMLP"
     figs = figutil.plot_model_views(model, is_embed=is_embed)
     demb = _demb_tok(spec["d_emb"])
+    d_mlp = spec["model_kwargs"]["d_mlp"]
     n_tok = results_io._fmt_n(spec["n_exp"])
     for view, fig in figs.items():
-        fname = f"{spec['model']}_demb{demb}_p{spec['str_p']}_n{n_tok}_{view}.png"
+        fname = f"{spec['model']}_demb{demb}_dmlp{d_mlp}_p{spec['str_p']}_n{n_tok}_{view}.png"
         figutil.save_fig(
             fig, os.path.join("model_views", spec["model"]), fname,
             f"{spec['model']} {view} (feature space)",
             n_group=spec["n_exp"],
             model=spec["model"], n_features=N_FEATURES, d_emb=spec["d_emb"],
-            p=spec["str_p"], n_exp=spec["n_exp"],
+            d_mlp=d_mlp, p=spec["str_p"], n_exp=spec["n_exp"],
         )
 
 
@@ -109,8 +110,8 @@ def _run_method(model, dataset, spec, method, *, smoke, force,
     a loss-curve figure. Skips if already done (unless force)."""
     d_emb = spec["d_emb"]
     run_id = results_io.make_run_id(
-        model=spec["model"], d_emb=d_emb, p=spec["str_p"],
-        n_exp=spec["n_exp"], method=method,
+        model=spec["model"], d_emb=d_emb, d_mlp=spec["model_kwargs"]["d_mlp"],
+        p=spec["str_p"], n_exp=spec["n_exp"], method=method,
     )
     if results_io.is_done(run_id) and not force:
         print(f"  [skip] {run_id}")
@@ -161,15 +162,16 @@ def _run_method(model, dataset, spec, method, *, smoke, force,
     )
 
     demb = _demb_tok(d_emb)
+    d_mlp = spec["model_kwargs"]["d_mlp"]
     n_tok = results_io._fmt_n(spec["n_exp"])
     k_tok = f"_k{k}" if k is not None else ""  # APD/OracleAPD self-identify k in the filename
     fig = figutil.plot_loss_curves(curves, method=method)
     figutil.save_fig(
         fig, os.path.join("loss_curves", method),
-        f"{spec['model']}_demb{demb}_p{spec['str_p']}_n{n_tok}_{method}{k_tok}_loss.png",
+        f"{spec['model']}_demb{demb}_dmlp{d_mlp}_p{spec['str_p']}_n{n_tok}_{method}{k_tok}_loss.png",
         f"{method} loss curves",
         n_group=spec["n_exp"],
-        model=spec["model"], d_emb=d_emb, p=spec["str_p"], n_exp=spec["n_exp"],
+        model=spec["model"], d_emb=d_emb, d_mlp=d_mlp, p=spec["str_p"], n_exp=spec["n_exp"],
         method=method, C=C, k=k,
     )
 
@@ -202,12 +204,12 @@ def run_one_model(spec, *, methods, base_steps, device, force, smoke,
 
 def _emit_sweep_summaries(methods, smoke, n_exps=None):
     """Sweep-level figures: final loss vs d_emb, one series per p, per (method,
-    n_exp). Regenerated from the full summary.csv each time."""
-    summary = results_io.load_summary()
+    n_exp). Regenerated from each exponent's summary.csv."""
     if n_exps is None:
         n_exps = SMOKE_N_EXPS if smoke else N_EXPS
     for method in methods:
         for n_exp in n_exps:
+            summary = results_io.load_summary(n_exp)
             fig = figutil.plot_sweep_summary(summary, method=method, n_exp=n_exp)
             n_tok = results_io._fmt_n(n_exp)
             figutil.save_fig(
@@ -221,17 +223,11 @@ def _emit_sweep_summaries(methods, smoke, n_exps=None):
 
 def main(*, smoke=False, methods=decomp_fit.METHODS, device="cpu",
          base_steps=10_000, force=False, n_exps=None, models_only=False,
-         no_train=False, tag=None, steps_scale=1.0, batch_override=None,
+         no_train=False, steps_scale=1.0, batch_override=None,
          drop_demb=None, d_mlp=D_MLP, no_linear=False):
     assert K < C, f"K ({K}) must be < C ({C}) or minimality is trivial"
-    if d_mlp != D_MLP and not tag:
-        raise SystemExit(f"--d-mlp {d_mlp} != default {D_MLP}: run_id does not encode "
-                         f"d_mlp, so you MUST pass --tag to namespace (e.g. --tag dmlp{d_mlp}).")
     if smoke:
         base_steps = SMOKE_BASE_STEPS
-    if tag:  # namespace outputs so e.g. a cheap preliminary pass (results/prelim)
-        results_io.set_tag(tag)   # never clobbers the full detailed run
-        figutil.set_tag(tag)
     specs = list(iter_model_specs(smoke, n_exps=n_exps, drop_demb=drop_demb, d_mlp=d_mlp,
                                   no_linear=no_linear))
     order = n_exps if n_exps is not None else (SMOKE_N_EXPS if smoke else N_EXPS)
@@ -240,7 +236,7 @@ def main(*, smoke=False, methods=decomp_fit.METHODS, device="cpu",
     print(f"  models={len(specs)}  methods={list(methods)}  device={device}  "
           f"C={C}  n_order={list(order)}  steps_scale={steps_scale}  "
           f"batch={batch_override or 'default'}  drop_demb={drop_demb or '-'}  "
-          f"tag={tag or '-'}  {mode}\n")
+          f"d_mlp={d_mlp}  {mode}\n")
 
     if models_only:
         # Train + cache every model (device-agnostic); no decomposition. Warms
@@ -259,7 +255,7 @@ def main(*, smoke=False, methods=decomp_fit.METHODS, device="cpu",
                       device=device, force=force, smoke=smoke, no_train=no_train,
                       steps_scale=steps_scale, batch_override=batch_override)
     _emit_sweep_summaries(methods, smoke, n_exps=n_exps)
-    print(f"\ndone. results -> {results_io.summary_path()} ; figures -> {figutil.FIG_ROOT}")
+    print(f"\ndone. results -> {results_io.RESULTS_DIR}/n*/ ; figures -> {figutil.FIG_ROOT}")
 
 
 if __name__ == "__main__":
@@ -281,9 +277,6 @@ if __name__ == "__main__":
     ap.add_argument("--no-train", action="store_true", dest="no_train",
                     help="only decompose already-cached models; skip uncached "
                          "(safe to run alongside a background --models-only trainer)")
-    ap.add_argument("--tag", default=None,
-                    help="namespace outputs under results/<tag> and figures/<tag> "
-                         "(e.g. --tag prelim), so a cheap pass doesn't clobber the full run")
     ap.add_argument("--steps-scale", type=float, default=1.0, dest="steps_scale",
                     help="scale every method's fit steps (e.g. 0.2 for a fast preliminary)")
     ap.add_argument("--batch", type=int, default=None, dest="batch_override",
@@ -291,13 +284,13 @@ if __name__ == "__main__":
     ap.add_argument("--drop-demb", nargs="+", type=int, default=None, dest="drop_demb",
                     help="exclude these embedding dims (e.g. --drop-demb 1000 for preliminary)")
     ap.add_argument("--d-mlp", type=int, default=D_MLP, dest="d_mlp",
-                    help=f"hidden width (default {D_MLP}); run_id does not encode it, so a "
-                         f"non-default value REQUIRES --tag (e.g. --d-mlp 100 --tag dmlp100)")
+                    help=f"hidden width (default {D_MLP}); first-class in the run_id, so "
+                         f"distinct widths land in distinct files (e.g. --d-mlp 100)")
     ap.add_argument("--no-linear", action="store_true", dest="no_linear",
                     help="skip the LinearMLP baselines (decompose only EmbedMLP cells)")
     args = ap.parse_args()
     main(smoke=args.smoke, methods=args.methods, device=args.device,
          base_steps=args.base_steps, force=args.force, n_exps=args.n_exps,
-         models_only=args.models_only, no_train=args.no_train, tag=args.tag,
+         models_only=args.models_only, no_train=args.no_train,
          steps_scale=args.steps_scale, batch_override=args.batch_override,
          drop_demb=args.drop_demb, d_mlp=args.d_mlp, no_linear=args.no_linear)
