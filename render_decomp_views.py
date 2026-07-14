@@ -179,11 +179,28 @@ def render_behavioural_faithfulness_vs_p(device="cpu"):
     print(f"[4/4] behavioural-faithfulness-vs-p figure: {out}")
 
 
+def render_losses_vs_p():
+    """One figure: the APD loss terms (faithful/minimal/simple/total) vs p, one line
+    per width, straight from the tidy summary (no decomp reload needed)."""
+    out_dir = os.path.join(figutil.FIG_ROOT, figutil.n_seg(N_EXP), "components")
+    os.makedirs(out_dir, exist_ok=True)
+    summary = results_io.load_summary(N_EXP)
+    fig = figutil.plot_losses_vs_p(summary, method=METHOD, n_exp=N_EXP,
+                                   model=MODEL, d_emb=DEMB)
+    out = os.path.join(out_dir,
+                       f"{MODEL}_demb{DEMB}_n{results_io._fmt_n(N_EXP)}"
+                       f"_{METHOD}_losses_vs_p.png")
+    fig.savefig(out, dpi=130, bbox_inches="tight")
+    figutil.plt.close(fig)
+    print(f"[5/5] {METHOD}-losses-vs-p figure: {out}")
+
+
 def main():
     render_per_cell()
     render_cross_p()
     render_faithfulness_vs_p()
     render_behavioural_faithfulness_vs_p()
+    render_losses_vs_p()
     print(f"\nAll component figures under "
           f"{os.path.join(figutil.FIG_ROOT, figutil.n_seg(N_EXP), 'components')}")
 

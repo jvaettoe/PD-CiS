@@ -354,6 +354,55 @@ def plot_faithfulness_vs_p(series: dict, *, params: dict | None = None):
     return fig
 
 
+def plot_losses_vs_p(summary, *, method: str, n_exp: float, model: str = "EmbedMLP",
+                     d_emb=None, terms=None):
+    """The decomposition's own loss terms as a function of sparsity p, one small
+    log-log panel per term, one line per model width d_mlp. Consumes the tidy long
+    summary (results_io.load_summary output) exactly like plot_sweep_summary, but
+    pivots the axes to x=p, y=final loss. `final` is the recorded end-of-fit value.
+    Filters to (model, method, n_exp, d_emb); default terms are APD's
+    faithful/minimal/simple/total (absent terms are skipped)."""
+    rows = _as_records(summary)
+    terms = terms or ["faithful", "minimal", "simple", "total"]
+    target_n = _fmt_n(float(n_exp))
+    demb_tok = "NA" if d_emb is None else str(d_emb)
+
+    # term -> d_mlp -> list[(p_float, final)]
+    by = {t: defaultdict(list) for t in terms}
+    present = set()
+    for r in rows:
+        if (str(r.get("model")) == model
+                and str(r.get("method")) == method
+                and str(r.get("term")) in by
+                and str(r.get("d_emb")) == demb_tok
+                and _fmt_n(float(r["n_exp"])) == target_n):
+            by[str(r["term"])][str(r.get("d_mlp"))].append(
+                (float(r["p"]), float(r["final"])))
+            present.add(str(r["term"]))
+
+    shown = [t for t in terms if t in present]
+    ncol = len(shown) or 1
+    fig, axes = plt.subplots(1, ncol, figsize=(4.0 * ncol, 4.0),
+                             squeeze=False, constrained_layout=True)
+    for ax, term in zip(axes[0], shown):
+        for d_mlp in sorted(by[term], key=lambda s: int(s) if s.isdigit() else s):
+            pts = sorted(by[term][d_mlp])
+            ax.plot([p for p, _ in pts], [v for _, v in pts],
+                    marker="o", label=f"d_mlp={d_mlp}")
+        ax.set_xscale("log")
+        ax.set_yscale("log")
+        ax.set_xlabel("data sparsity p (log)")
+        ax.set_ylabel("final loss (log)")
+        ax.set_title(term, fontsize=11, fontweight="bold")
+        ax.grid(True, alpha=0.3, which="both")
+        ax.legend(fontsize=9)
+    fig.suptitle(component_title(
+        f"{method} loss terms vs sparsity p", {"model": model, "d_emb": d_emb,
+                                               "n_exp": n_exp, "method": method},
+        "final decomposition loss per term (end of fit)"), fontsize=12)
+    return fig
+
+
 def plot_behavioural_faithfulness_vs_p(series: dict, *, params: dict | None = None):
     """How well the FULL decomposition (sum of all C components) reproduces the
     model's OUTPUTS, as a function of sparsity p, one line per width. This is the
