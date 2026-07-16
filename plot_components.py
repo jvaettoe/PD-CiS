@@ -43,7 +43,7 @@ def main():
                     help="hidden width (first-class in the run_id)")
     ap.add_argument("--p", default="0.1")
     ap.add_argument("--n", type=float, default=2.0, dest="n_exp")
-    ap.add_argument("--method", default="APD", choices=["APD", "OracleAPD", "SPD"])
+    ap.add_argument("--method", default="APD", choices=["APD", "OracleAPD", "SPD", "ExactPD"])
     ap.add_argument("--top", type=int, default=16)
     ap.add_argument("--device", default="cpu")
     a = ap.parse_args()
@@ -55,12 +55,13 @@ def main():
         info = results_io.parse_run_id(run_id)
     except ValueError:
         info = {}
-    # k = round(p * n_features) is a pure function of p (APD/OracleAPD only; SPD has none)
+    # k = round(p * n_features) is a pure function of p (APD/OracleAPD/ExactPD, which
+    # all use batch-top-k; SPD has none)
     k = None
-    if info.get("p") and info.get("method") in ("APD", "OracleAPD"):
+    if info.get("p") and info.get("method") in ("APD", "OracleAPD", "ExactPD"):
         k = max(1, min(pd_obj.C - 1, round(float(info["p"]) * 100)))
     params = {**info, "C": pd_obj.C, "k": k, "rank": getattr(pd_obj, "rank", None)}
-    # behavioural usage: only APD/OracleAPD expose batch-top-k attributions
+    # behavioural usage: APD/OracleAPD/ExactPD expose batch-top-k attributions
     usage = None
     if k is not None and hasattr(pd_obj, "usage_stats"):
         import torch

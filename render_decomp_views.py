@@ -1,6 +1,10 @@
-"""Render the component-visualisation suite for the saved n=4 APD decompositions
+"""Render the component-visualisation suite for the saved n=4 decompositions
 of EmbedMLP (d_emb=200) at BOTH hidden widths, across all sparsities p, so you can
 see the components and how they change as p changes.
+
+Defaults to APD; pass --method to run the same suite for any fitted method (e.g.
+--method ExactPD for the handcoded per-feature ground truth). Every output filename
+carries the method, so methods never overwrite one another.
 
 Two outputs, both under figures/n4/components/:
   1. Per-cell suite (delegates to plot_components.py): for each (d_mlp, p) the
@@ -36,6 +40,25 @@ N_EXP = 4.0
 METHOD = "APD"
 DMLPS = [50, 100]
 PS = ["0.001", "0.01", "0.1", "0.5", "0.8"]
+
+
+def demb_arg():
+    """Embedding dim for make_run_id: None for LinearMLP (its run_ids have no d_emb),
+    else DEMB. Keeps this suite runnable for either architecture."""
+    return None if MODEL == "LinearMLP" else DEMB
+
+
+def demb_tok() -> str:
+    """Filename token for the embedding dim: 'NA' for LinearMLP, else the number."""
+    return "NA" if MODEL == "LinearMLP" else str(DEMB)
+
+
+def components_dir() -> str:
+    """Per-method output dir: figures/n<n>/components/<method>/ (matches the
+    loss_curves/<method>/ layout so each PD method's figures stay separate)."""
+    d = os.path.join(figutil.FIG_ROOT, figutil.n_seg(N_EXP), "components", METHOD)
+    os.makedirs(d, exist_ok=True)
+    return d
 
 
 def k_for(p: str, C: int) -> int:
@@ -79,7 +102,11 @@ def behavioural_faithfulness(pd_obj, p: str, device="cpu", batch=4096):
 
 
 def build_usage(pd_obj, p: str, k: int, device="cpu"):
-    """APD behavioural usage on a fresh batch (same recipe as plot_components)."""
+    """Batch-top-k behavioural usage on a fresh batch (same recipe as
+    plot_components). Only APD/OracleAPD/ExactPD expose usage_stats; SPD (stochastic
+    gating, no k) has none, so return None and let the usage panel be omitted."""
+    if not hasattr(pd_obj, "usage_stats"):
+        return None
     ds = CleanDataset(n_features=pd_obj.model.n_features, p=float(p),
                       device=device, seed=0)
     xb, _ = ds.generate_batch(1024)
@@ -98,6 +125,7 @@ def render_per_cell():
             cmd = [sys.executable, "plot_components.py",
                    "--model", MODEL, "--demb", str(DEMB), "--d-mlp", str(d_mlp),
                    "--p", p, "--n", results_io._fmt_n(N_EXP), "--method", METHOD]
+            # --demb is a valid int (ignored for LinearMLP: build_run_id maps it to None)
             r = subprocess.run(cmd, capture_output=True, text=True)
             if r.returncode == 0:
                 n_ok += 1
@@ -107,22 +135,21 @@ def render_per_cell():
 
 
 def render_cross_p(device="cpu"):
-    out_dir = os.path.join(figutil.FIG_ROOT, figutil.n_seg(N_EXP), "components")
-    os.makedirs(out_dir, exist_ok=True)
+    out_dir = components_dir()
     for d_mlp in DMLPS:
         entries = []
         for p in PS:
-            run_id = results_io.make_run_id(model=MODEL, d_emb=DEMB, d_mlp=d_mlp,
+            run_id = results_io.make_run_id(model=MODEL, d_emb=demb_arg(), d_mlp=d_mlp,
                                             p=p, n_exp=N_EXP, method=METHOD)
             pd_obj = decomp_fit.load_decomposition(run_id, device=device)
             k = k_for(p, pd_obj.C)
             entries.append({"p": p, "k": k, "pd_obj": pd_obj,
                             "usage": build_usage(pd_obj, p, k, device)})
-        params = {"model": MODEL, "d_emb": DEMB, "d_mlp": d_mlp,
+        params = {"model": MODEL, "d_emb": demb_arg(), "d_mlp": d_mlp,
                   "n_exp": N_EXP, "method": METHOD, "C": entries[0]["pd_obj"].C}
         fig = figutil.plot_components_vs_p(entries, params=params)
         out = os.path.join(out_dir,
-                           f"{MODEL}_demb{DEMB}_dmlp{d_mlp}_n{results_io._fmt_n(N_EXP)}"
+                           f"{MODEL}_demb{demb_tok()}_dmlp{d_mlp}_n{results_io._fmt_n(N_EXP)}"
                            f"_{METHOD}_vs_p.png")
         fig.savefig(out, dpi=130, bbox_inches="tight")
         figutil.plt.close(fig)
@@ -132,22 +159,21 @@ def render_cross_p(device="cpu"):
 
 def render_faithfulness_vs_p(device="cpu"):
     """One figure, both widths: effective-map Frobenius residual vs p."""
-    out_dir = os.path.join(figutil.FIG_ROOT, figutil.n_seg(N_EXP), "components")
-    os.makedirs(out_dir, exist_ok=True)
+    out_dir = components_dir()
     series = {}
     for d_mlp in DMLPS:
         pts = []
         for p in PS:
-            run_id = results_io.make_run_id(model=MODEL, d_emb=DEMB, d_mlp=d_mlp,
+            run_id = results_io.make_run_id(model=MODEL, d_emb=demb_arg(), d_mlp=d_mlp,
                                             p=p, n_exp=N_EXP, method=METHOD)
             pd_obj = decomp_fit.load_decomposition(run_id, device=device)
             raw, rel = residual_frobenius(pd_obj)
             pts.append((float(p), raw, rel))
         series[d_mlp] = pts
-    params = {"model": MODEL, "d_emb": DEMB, "n_exp": N_EXP, "method": METHOD}
+    params = {"model": MODEL, "d_emb": demb_arg(), "n_exp": N_EXP, "method": METHOD}
     fig = figutil.plot_faithfulness_vs_p(series, params=params)
     out = os.path.join(out_dir,
-                       f"{MODEL}_demb{DEMB}_n{results_io._fmt_n(N_EXP)}"
+                       f"{MODEL}_demb{demb_tok()}_n{results_io._fmt_n(N_EXP)}"
                        f"_{METHOD}_faithfulness_vs_p.png")
     fig.savefig(out, dpi=130, bbox_inches="tight")
     figutil.plt.close(fig)
@@ -157,22 +183,21 @@ def render_faithfulness_vs_p(device="cpu"):
 def render_behavioural_faithfulness_vs_p(device="cpu"):
     """One figure, both widths: output-space error of the Σ-all-components forward
     vs the model, as a function of p."""
-    out_dir = os.path.join(figutil.FIG_ROOT, figutil.n_seg(N_EXP), "components")
-    os.makedirs(out_dir, exist_ok=True)
+    out_dir = components_dir()
     series = {}
     for d_mlp in DMLPS:
         pts = []
         for p in PS:
-            run_id = results_io.make_run_id(model=MODEL, d_emb=DEMB, d_mlp=d_mlp,
+            run_id = results_io.make_run_id(model=MODEL, d_emb=demb_arg(), d_mlp=d_mlp,
                                             p=p, n_exp=N_EXP, method=METHOD)
             pd_obj = decomp_fit.load_decomposition(run_id, device=device)
             mse, rel = behavioural_faithfulness(pd_obj, p, device)
             pts.append((float(p), mse, rel))
         series[d_mlp] = pts
-    params = {"model": MODEL, "d_emb": DEMB, "n_exp": N_EXP, "method": METHOD}
+    params = {"model": MODEL, "d_emb": demb_arg(), "n_exp": N_EXP, "method": METHOD}
     fig = figutil.plot_behavioural_faithfulness_vs_p(series, params=params)
     out = os.path.join(out_dir,
-                       f"{MODEL}_demb{DEMB}_n{results_io._fmt_n(N_EXP)}"
+                       f"{MODEL}_demb{demb_tok()}_n{results_io._fmt_n(N_EXP)}"
                        f"_{METHOD}_behavioural_faithfulness_vs_p.png")
     fig.savefig(out, dpi=130, bbox_inches="tight")
     figutil.plt.close(fig)
@@ -182,13 +207,12 @@ def render_behavioural_faithfulness_vs_p(device="cpu"):
 def render_losses_vs_p():
     """One figure: the APD loss terms (faithful/minimal/simple/total) vs p, one line
     per width, straight from the tidy summary (no decomp reload needed)."""
-    out_dir = os.path.join(figutil.FIG_ROOT, figutil.n_seg(N_EXP), "components")
-    os.makedirs(out_dir, exist_ok=True)
+    out_dir = components_dir()
     summary = results_io.load_summary(N_EXP)
     fig = figutil.plot_losses_vs_p(summary, method=METHOD, n_exp=N_EXP,
-                                   model=MODEL, d_emb=DEMB)
+                                   model=MODEL, d_emb=demb_arg())
     out = os.path.join(out_dir,
-                       f"{MODEL}_demb{DEMB}_n{results_io._fmt_n(N_EXP)}"
+                       f"{MODEL}_demb{demb_tok()}_n{results_io._fmt_n(N_EXP)}"
                        f"_{METHOD}_losses_vs_p.png")
     fig.savefig(out, dpi=130, bbox_inches="tight")
     figutil.plt.close(fig)
@@ -201,9 +225,26 @@ def main():
     render_faithfulness_vs_p()
     render_behavioural_faithfulness_vs_p()
     render_losses_vs_p()
-    print(f"\nAll component figures under "
-          f"{os.path.join(figutil.FIG_ROOT, figutil.n_seg(N_EXP), 'components')}")
+    print(f"\nAll component figures under {components_dir()}")
 
 
 if __name__ == "__main__":
+    import argparse
+
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--method", default=METHOD,
+                    choices=["APD", "OracleAPD", "SPD", "ExactPD"],
+                    help="which fitted decomposition to visualise (default APD)")
+    ap.add_argument("--model", default=MODEL, choices=["EmbedMLP", "LinearMLP"],
+                    help="model class (default EmbedMLP; LinearMLP has no d_emb)")
+    ap.add_argument("--demb", type=int, default=DEMB, help="embedding dim (default 200)")
+    ap.add_argument("--n", type=float, default=N_EXP, dest="n_exp",
+                    help="loss exponent / topical group (default 4)")
+    ap.add_argument("--dmlps", type=int, nargs="+", default=DMLPS,
+                    help="hidden widths to render (default 50 100)")
+    a = ap.parse_args()
+
+    # Reassign the module-level config the render functions read at call time.
+    METHOD, MODEL, DEMB, N_EXP, DMLPS = a.method, a.model, a.demb, a.n_exp, a.dmlps
     main()

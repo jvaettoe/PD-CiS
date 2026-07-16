@@ -191,6 +191,34 @@ class PD(nn.Module, ABC):
         (rank-1 = one clean mechanism) as intended."""
         return torch.linalg.svdvals(self._component_weight(name, c)).detach()
 
+    def _component_signature(
+        self, c: int
+    ) -> tuple[Tensor, Tensor, float, Tensor, Tensor]:
+        """Rank-1 signature of component c from a SINGLE SVD of w_in_c / w_out_c,
+        returning BOTH the feature-space (u, v, coupling) and hidden-space (read_h,
+        write_h) directions. Shared by component_read_write_profiles /
+        component_weight_profiles / component_signatures so a full inspection SVDs each
+        component's matrices once instead of two-to-three times (the SVD is the cost;
+        deriving both views from it is free)."""
+        w_in_c, w_out_c = self.component_matrices(c)
+        Ui, Si, Vi = torch.linalg.svd(w_in_c, full_matrices=False)
+        Uo, So, Vo = torch.linalg.svd(w_out_c, full_matrices=False)
+        # feature-space read/write directions (projected through the embedding)
+        a_in = (Ui[:, 0] * Si[0]).unsqueeze(1)      # (d_in, 1) input direction
+        b_out = (Vo[0, :] * So[0]).unsqueeze(0)     # (1, d_out) output direction
+        u = self.model.project_in(a_in)[:, 0]       # (n_features,)
+        v = self.model.project_out(b_out)[0, :]     # (n_features,)
+        u = u * (1.0 if u[u.abs().argmax()] >= 0 else -1.0)
+        v = v * (1.0 if v[v.abs().argmax()] >= 0 else -1.0)
+        coupling = float((Vi[0, :] @ Uo[:, 0]).item())
+        # hidden-space weight vectors (d_mlp side), sign tied to the FEATURE side so
+        # the sign is meaningful (for ExactPD this recovers the true weight signs).
+        s_in = 1.0 if Ui[Ui[:, 0].abs().argmax(), 0] >= 0 else -1.0
+        s_out = 1.0 if Vo[0, Vo[0, :].abs().argmax()] >= 0 else -1.0
+        read_h = Si[0] * Vi[0, :] * s_in
+        write_h = So[0] * Uo[:, 0] * s_out
+        return u.detach(), v.detach(), coupling, read_h.detach(), write_h.detach()
+
     def component_read_write_profiles(
         self, c: int
     ) -> tuple[Float[Tensor, "n_features"], Float[Tensor, "n_features"], float]:
@@ -205,17 +233,24 @@ class PD(nn.Module, ABC):
         dominant mode at rank>1), projected to feature space so it works for both
         LinearMLP (identity projection) and EmbedMLP (folds w_e). Sign is fixed so
         each profile's largest-magnitude entry is positive (SVD sign is arbitrary)."""
-        w_in_c, w_out_c = self.component_matrices(c)
-        Ui, Si, Vi = torch.linalg.svd(w_in_c, full_matrices=False)
-        Uo, So, Vo = torch.linalg.svd(w_out_c, full_matrices=False)
-        a_in = (Ui[:, 0] * Si[0]).unsqueeze(1)      # (d_in, 1) input direction
-        b_out = (Vo[0, :] * So[0]).unsqueeze(0)     # (1, d_out) output direction
-        u = self.model.project_in(a_in)[:, 0]       # (n_features,)
-        v = self.model.project_out(b_out)[0, :]     # (n_features,)
-        coupling = float((Vi[0, :] @ Uo[:, 0]).item())
-        u = u * (1.0 if u[u.abs().argmax()] >= 0 else -1.0)
-        v = v * (1.0 if v[v.abs().argmax()] >= 0 else -1.0)
-        return u.detach(), v.detach(), coupling
+        u, v, coupling, _, _ = self._component_signature(c)
+        return u, v, coupling
+
+    def component_signatures(
+        self,
+    ) -> tuple[Float[Tensor, "C n_features"], Float[Tensor, "C n_features"],
+               Float[Tensor, "C d_mlp"], Float[Tensor, "C d_mlp"], Float[Tensor, "C"]]:
+        """All per-component signatures in ONE SVD pass over the C components:
+        (reads_feat, writes_feat, reads_hidden, writes_hidden, couplings). read_write_
+        profiles() and component_weight_profiles() are thin views over this; a caller
+        that needs both (e.g. plot_components) should call this once rather than both
+        wrappers, which would SVD every component twice."""
+        uu, vv, rh, wh, cc = [], [], [], [], []
+        for c in range(self.C):
+            u, v, coup, r_h, w_h = self._component_signature(c)
+            uu.append(u); vv.append(v); rh.append(r_h); wh.append(w_h); cc.append(coup)
+        return (torch.stack(uu), torch.stack(vv), torch.stack(rh), torch.stack(wh),
+                torch.tensor(cc, device=uu[0].device))
 
     def read_write_profiles(
         self,
@@ -223,15 +258,33 @@ class PD(nn.Module, ABC):
         """Read and write feature profiles for ALL components, each (C, n_features).
         The behavioural bipartite view of the decomposition: row c of `reads` is the
         input feature(s) component c responds to, row c of `writes` the output
-        feature(s) it drives."""
-        reads, writes = [], []
-        for c in range(self.C):
-            u, v, _ = self.component_read_write_profiles(c)
-            reads.append(u)
-            writes.append(v)
-        return torch.stack(reads), torch.stack(writes)
+        feature(s) it drives. (View over component_signatures.)"""
+        reads_feat, writes_feat, _, _, _ = self.component_signatures()
+        return reads_feat, writes_feat
 
-    def component_metrics(self, eps: float = 1e-12, active_frac: float = 0.01) -> dict:
+    def component_weight_profiles(
+        self,
+    ) -> tuple[Float[Tensor, "C d_mlp"], Float[Tensor, "C d_mlp"]]:
+        """The actual per-component WEIGHTS over the d_mlp hidden neurons (as opposed
+        to read_write_profiles, which projects to feature space). For component c:
+          reads_hidden[c]  -- how c reads INTO each hidden neuron (the read-in weight
+                              vector over neurons)
+          writes_hidden[c] -- how c writes OUT of each hidden neuron (the write-out
+                              weight vector over neurons)
+        Taken from the dominant singular mode of w_in_c / w_out_c but kept in HIDDEN
+        space (the singular vector on the d_mlp side, scaled by its singular value),
+        the exact hidden counterparts of read_write_profiles' u/v. Sign is fixed by the
+        FEATURE side, so it is meaningful and exact for LinearMLP / ExactPD:
+        reads_hidden[c] == w_in[c, :] and writes_hidden[c] == w_out[:, c] (row c / column
+        c of the effective weights). For a raw-EmbedMLP APD fit, w_in_c lives in
+        embedding space, so the sign is tied to an embedding direction rather than a
+        feature -- the vector is still the true dominant hidden pattern, only its
+        overall sign is embedding-relative. (View over component_signatures.)"""
+        _, _, reads_hidden, writes_hidden, _ = self.component_signatures()
+        return reads_hidden, writes_hidden
+
+    def component_metrics(self, eps: float = 1e-12, active_frac: float = 0.01, *,
+                          reads=None, writes=None, eff_norm=None, diag_share=None) -> dict:
         """Scalar diagnostics of how cleanly the fit decomposed, from the READ and
         WRITE feature profiles (not the |diagonal|, which conflates the two and
         hides genuine cross-feature components):
@@ -249,10 +302,17 @@ class PD(nn.Module, ABC):
                                    used component
           - mean_monosemanticity  = mean monosemanticity over used components
           - mean_diagonal_share   = mean |effective| diagonal share over used comps
-        Returned per-component AND aggregated so both can be stored."""
-        reads, writes = self.read_write_profiles()            # (C, n_features) each
-        eff_norm = self.component_effective_norms()           # (C,) feature-space magnitude
-        diag_share = self.component_diagonal_shares(eps)      # (C,)
+        Returned per-component AND aggregated so both can be stored.
+
+        reads/writes/eff_norm/diag_share may be passed in precomputed (e.g. from a
+        caller that already ran component_signatures / component_effective_norms) to
+        avoid recomputing the per-component SVD pass; each defaults to computing itself."""
+        if reads is None or writes is None:
+            reads, writes = self.read_write_profiles()        # (C, n_features) each
+        if eff_norm is None:
+            eff_norm = self.component_effective_norms()       # (C,) feature-space magnitude
+        if diag_share is None:
+            diag_share = self.component_diagonal_shares(eps)  # (C,)
         ru, wv = reads.abs(), writes.abs()
         read_share = ru.max(dim=1).values / (ru.sum(dim=1) + eps)
         write_share = wv.max(dim=1).values / (wv.sum(dim=1) + eps)
@@ -487,6 +547,68 @@ class OracleAPD(APD):
             mse_ablate = self._per_example_mse(feats, target_output)           # (C, B)
             attr = (mse_ablate - base.unsqueeze(0)).abs().T                    # (B, C)
         return attr
+
+
+# ---------------------------------------------------
+# ExactPD: the handcoded per-feature ground-truth
+# ---------------------------------------------------
+
+class ExactPD(APD):
+    """The exact, NON-fitted per-feature decomposition, used as a ground-truth
+    reference for the learned methods (APD/OracleAPD/SPD). Component i is feature
+    i's own mechanism: read-in = row i of the effective read-in matrix, write-out
+    = column i of the effective read-out matrix, so C = n_features and each
+    component is rank-1.
+
+    Exact for BOTH architectures because the model is behaviourally a feature-space
+    LinearMLP:
+        model(x) == relu(x @ readin) @ readout,
+    where readin = readin() (n_features, d_mlp) and readout = readout()
+    (d_mlp, n_features). (For EmbedMLP the linear embedding folds outside the ReLU:
+    readin = w_e @ w_in, readout = w_out @ w_e.T; for LinearMLP they are just
+    w_in/w_out.) Splitting those folded matrices by row / column sums back exactly,
+    so faithfulness == 0 by construction.
+
+    Implemented by reusing ALL of APD's machinery on a feature-space LinearMLP
+    SURROGATE whose weights are readin()/readout(): a LinearMLP has identity
+    projection/embedding hooks, so the inherited forward, batch-top-k attributions,
+    component metrics and viz all work unchanged and uniformly. The per-feature
+    rank-1 A@B factors are set analytically and frozen (requires_grad=False), so the
+    method has NO trainable parameters and does zero fit steps. Because we force
+    each component to read feature i and write feature i, monosemanticity == 1 by
+    construction (a sanity marker); the informative outputs are the minimality /
+    simplicity / behavioural terms -- what the ideal decomposition scores."""
+
+    def __init__(self, model: nn.Module, C: int | None = None, rank: int = 1,
+                 param_names: list[str] | None = None) -> None:
+        from mlp import LinearMLP  # deferred: mlp imports pd (circular at module load)
+
+        n_features, d_mlp = model.n_features, model.d_mlp
+        readin = model.readin().detach()    # (n_features, d_mlp)   feature-space read-in
+        readout = model.readout().detach()  # (d_mlp, n_features)   feature-space read-out
+
+        # Feature-space linear surrogate: relu(x @ readin) @ readout == model(x).
+        surrogate = LinearMLP(n_features=n_features, d_mlp=d_mlp, device=model.device)
+        with torch.no_grad():
+            surrogate.w_in.copy_(readin)
+            surrogate.w_out.copy_(readout)
+
+        # Reuse APD's A/B scaffolding + the w_in/w_out assertion; C = one per feature.
+        super().__init__(surrogate, C=n_features, rank=1, param_names=param_names)
+
+        # Overwrite the random factors with the exact per-feature rank-1 components,
+        # frozen so they are excluded from the optimiser and never drift.
+        #   w_in  (n_features, d_mlp):    P_in[i]  = e_i (row i) outer readin[i, :]
+        #   w_out (d_mlp, n_features):    P_out[i] = readout[:, i] outer e_i (col i)
+        eye = torch.eye(n_features, device=model.device)
+        self.A[self._key("w_in")] = nn.Parameter(
+            eye.unsqueeze(-1), requires_grad=False)            # (C, n_features, 1)
+        self.B[self._key("w_in")] = nn.Parameter(
+            readin.unsqueeze(1), requires_grad=False)          # (C, 1, d_mlp)
+        self.A[self._key("w_out")] = nn.Parameter(
+            readout.T.unsqueeze(-1), requires_grad=False)      # (C, d_mlp, 1)
+        self.B[self._key("w_out")] = nn.Parameter(
+            eye.unsqueeze(1), requires_grad=False)             # (C, 1, n_features)
 
 
 # -----------------------------------

@@ -83,7 +83,7 @@ def make_run_id(*, model: str, d_emb: int | None, d_mlp: int, p: str,
 
 _RUN_ID_RE = re.compile(
     r"^(?P<model>.+?)_demb(?P<demb>NA|\d+)_dmlp(?P<dmlp>\d+)_p(?P<p>[0-9.eE+-]+)"
-    r"_n(?P<n>[0-9.]+)_(?P<method>APD|OracleAPD|SPD)$"
+    r"_n(?P<n>[0-9.]+)_(?P<method>APD|OracleAPD|SPD|ExactPD)$"
 )
 
 

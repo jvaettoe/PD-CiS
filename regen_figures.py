@@ -58,7 +58,7 @@ def main():
         dtok = _demb_tok(demb)
 
         fig = figutil.plot_loss_curves(curves, method=method)
-        k_tok = f"_k{k}" if k not in (None, "") and method in ("APD", "OracleAPD") else ""
+        k_tok = f"_k{k}" if k not in (None, "") and method in ("APD", "OracleAPD", "ExactPD") else ""
         figutil.save_fig(
             fig, os.path.join("loss_curves", method),
             f"{model}_demb{dtok}_dmlp{dmlp}_p{p}_n{ntok}_{method}{k_tok}_loss.png",

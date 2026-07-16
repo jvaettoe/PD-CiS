@@ -9,7 +9,7 @@ from collections import defaultdict
 
 import matplotlib.pyplot as plt
 
-from results_io import _fmt_n
+from results_io import _fmt_n, parse_run_id
 
 FIG_ROOT = os.path.join(os.path.dirname(__file__), "figures")
 
@@ -139,8 +139,12 @@ def plot_components(pd_obj, *, top: int = 16, params: dict | None = None,
     denom = float(eff_norm.max()) + 1e-12
     n_used = int((eff_norm > 0.01 * denom).sum())
     top_idx = [int(c) for c in order[:min(top, pd_obj.C)]]
-    reads, writes = pd_obj.read_write_profiles()
-    reads, writes = reads.cpu().numpy(), writes.cpu().numpy()
+    # One SVD pass: feature-space (reads/writes) for profiles+assignment AND
+    # hidden-space (reads_h/writes_h) for the weights views, instead of SVDing every
+    # component twice via read_write_profiles() + component_weight_profiles().
+    reads_t, writes_t, reads_h_t, writes_h_t, _ = pd_obj.component_signatures()
+    reads, writes = reads_t.cpu().numpy(), writes_t.cpu().numpy()
+    reads_h, writes_h = reads_h_t.cpu().numpy(), writes_h_t.cpu().numpy()
     nf = reads.shape[1]
     figs = {}
 
@@ -237,6 +241,86 @@ def plot_components(pd_obj, *, top: int = 16, params: dict | None = None,
         f"relative residual {rel:.1e}"), fontsize=11)
     figs["faithfulness"] = fig
 
+    # 5. component WEIGHTS over hidden neurons -- the actual per-component weight
+    #    vectors (not the feature-space projection). Each row is one component's
+    #    read-in / write-out weight vector over the d_mlp neurons; stacked over all
+    #    C components this is a (C x d_mlp) matrix. For a LinearMLP these two heatmaps
+    #    ARE w_in and w_out.T (rows = components = features). reads_h/writes_h come from
+    #    the single component_signatures() pass above.
+    C, d_mlp = reads_h.shape
+    rh_o, wh_o = reads_h[order], writes_h[order]      # eff-norm-sorted rows (like assignment)
+    # aspect="equal" (NOT "auto"): keep the true C x d_mlp proportions so a tall
+    # (C > d_mlp) matrix is not stretched into a misleading square.
+    fig, (a1, a2) = plt.subplots(1, 2, figsize=(4 + d_mlp / 12, 2 + C / 12),
+                                 constrained_layout=True, sharey=True)
+    vr = float(np.abs(rh_o).max()) or 1.0
+    vw = float(np.abs(wh_o).max()) or 1.0
+    im1 = a1.imshow(rh_o, aspect="equal", cmap="RdBu", vmin=-vr, vmax=vr)
+    a1.set_title("read-in weights  (component → hidden neuron)", fontsize=10)
+    a1.set_xlabel(f"hidden neuron (d_mlp={d_mlp})")
+    a1.set_ylabel(f"component c = feature c (C={C}, sorted by effective norm)")
+    fig.colorbar(im1, ax=a1, fraction=0.046, pad=0.04)
+    im2 = a2.imshow(wh_o, aspect="equal", cmap="RdBu", vmin=-vw, vmax=vw)
+    a2.set_title("write-out weights  (hidden neuron → component)", fontsize=10)
+    a2.set_xlabel(f"hidden neuron (d_mlp={d_mlp})")
+    fig.colorbar(im2, ax=a2, fraction=0.046, pad=0.04)
+    fig.suptitle(component_title(
+        f"Component weights over hidden neurons  [{C}×{d_mlp}]", params,
+        f"signed; for LinearMLP these are exactly w_in / w_out.T"), fontsize=11)
+    figs["weights"] = fig
+
+    # 6. per-component weight DETAIL: top-`top` components, read-in (blue) and
+    #    write-out (red) weights across the d_mlp neurons, signed.
+    fig, axes = plt.subplots(nrow, ncol, figsize=(3.3 * ncol, 2.1 * nrow + 0.6),
+                             constrained_layout=True, squeeze=False)
+    xh = np.arange(d_mlp)
+    for i, c in enumerate(top_idx):
+        ax = axes[i // ncol][i % ncol]
+        r, w = reads_h[c], writes_h[c]
+        ax.bar(xh, r, color="steelblue", width=1.0, alpha=0.75, label="read-in")
+        ax.bar(xh, w, color="indianred", width=1.0, alpha=0.6, label="write-out")
+        ax.axhline(0, color="k", lw=0.5)
+        peak = int(np.abs(r).argmax())
+        ax.set_title(f"c{c}: peak neuron {peak}   ‖e‖={eff_norm[c]:.2g}", fontsize=8)
+        ax.set_xticks([])
+        ax.set_yticks([])
+    for j in range(len(top_idx), nrow * ncol):
+        axes[j // ncol][j % ncol].axis("off")
+    if top_idx:
+        axes[0][0].legend(fontsize=6, loc="upper right")
+    fig.suptitle(component_title(
+        "Read-in (blue) / write-out (red) weights over hidden neurons", params,
+        f"top {len(top_idx)} by effective norm; x = hidden neuron (0..{d_mlp-1})"),
+        fontsize=11)
+    figs["weight_profiles"] = fig
+
+    # 7. FULL per-component weight matrices: each component's P_in[c] (dim0 x d_mlp)
+    #    and P_out[c] (d_mlp x dim1) at their native W_in / W_out shape. For ExactPD
+    #    each is zero except one row / column (feature c); for APD/SPD a dense rank-1
+    #    outer product. top-`n_mat` components, two columns (P_in | P_out) per row.
+    n_mat = min(6, len(top_idx))
+    if n_mat:
+        fig, axes = plt.subplots(n_mat, 2, figsize=(9, 2.4 * n_mat + 0.6),
+                                 constrained_layout=True, squeeze=False)
+        for i in range(n_mat):
+            c = top_idx[i]
+            w_in_c, w_out_c = pd_obj.component_matrices(c)
+            w_in_c = w_in_c.detach().cpu().numpy()
+            w_out_c = w_out_c.detach().cpu().numpy()
+            for ax, M, lbl in ((axes[i][0], w_in_c, "P_in[c]  (n_features × d_mlp)"),
+                               (axes[i][1], w_out_c, "P_out[c]  (d_mlp × n_features)")):
+                vm = float(np.abs(M).max()) or 1.0
+                im = ax.imshow(M, aspect="auto", cmap="RdBu", vmin=-vm, vmax=vm)
+                ax.set_title(f"c{c}: {lbl}  [{M.shape[0]}×{M.shape[1]}]", fontsize=8)
+                ax.set_xticks([])
+                ax.set_yticks([])
+                fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+        fig.suptitle(component_title(
+            "Full per-component weight matrices (native W_in / W_out shape)", params,
+            f"top {n_mat} by effective norm; ExactPD: one active row / column per component"),
+            fontsize=11)
+        figs["weight_matrices"] = fig
+
     return figs
 
 
@@ -260,12 +344,15 @@ def plot_components_vs_p(entries: list, *, params: dict | None = None):
                              squeeze=False, constrained_layout=True)
     for i, e in enumerate(entries):
         pd_obj, k = e["pd_obj"], e.get("k")
-        reads, writes = pd_obj.read_write_profiles()
-        reads, writes = np.abs(reads.cpu().numpy()), np.abs(writes.cpu().numpy())
-        eff_norm = pd_obj.component_effective_norms().cpu().numpy()
+        # One SVD pass per row, reused for the heatmaps AND component_metrics (which
+        # would otherwise recompute the same read/write profiles).
+        reads_t, writes_t, _, _, _ = pd_obj.component_signatures()
+        eff_norm_t = pd_obj.component_effective_norms()
+        reads, writes = np.abs(reads_t.cpu().numpy()), np.abs(writes_t.cpu().numpy())
+        eff_norm = eff_norm_t.cpu().numpy()
         order = np.argsort(eff_norm)[::-1]
         ro, wo = reads[order], writes[order]
-        m = pd_obj.component_metrics()
+        m = pd_obj.component_metrics(reads=reads_t, writes=writes_t, eff_norm=eff_norm_t)
 
         a_r, a_w, a_u = axes[i]
         im_r = a_r.imshow(ro, aspect="auto", cmap="magma", vmin=0.0,
@@ -365,7 +452,18 @@ def plot_losses_vs_p(summary, *, method: str, n_exp: float, model: str = "EmbedM
     rows = _as_records(summary)
     terms = terms or ["faithful", "minimal", "simple", "total"]
     target_n = _fmt_n(float(n_exp))
-    demb_tok = "NA" if d_emb is None else str(d_emb)
+
+    # d_emb match that survives pandas dtype coercion. Once any LinearMLP row (blank
+    # d_emb) lands in summary.csv the whole column becomes float, so EmbedMLP's 200
+    # stringifies as '200.0' -- an exact string compare then silently matches nothing.
+    # Mirror plot_sweep_summary: treat blank/NA/nan/None as the no-d_emb (LinearMLP)
+    # bucket, else compare numerically. d_emb=None selects the LinearMLP bucket.
+    def _demb_match(r):
+        d = str(r.get("d_emb"))
+        has = d not in ("", "NA", "nan", "None")
+        if d_emb is None:
+            return not has
+        return has and float(d) == float(d_emb)
 
     # term -> d_mlp -> list[(p_float, final)]
     by = {t: defaultdict(list) for t in terms}
@@ -374,7 +472,7 @@ def plot_losses_vs_p(summary, *, method: str, n_exp: float, model: str = "EmbedM
         if (str(r.get("model")) == model
                 and str(r.get("method")) == method
                 and str(r.get("term")) in by
-                and str(r.get("d_emb")) == demb_tok
+                and _demb_match(r)
                 and _fmt_n(float(r["n_exp"])) == target_n):
             by[str(r["term"])][str(r.get("d_mlp"))].append(
                 (float(r["p"]), float(r["final"])))
@@ -443,10 +541,16 @@ def save_component_figs(figs: dict, run_id: str, *, n_group=None,
                         k=None, rank=None, dpi: int = 130, close: bool = True) -> str:
     """Save the plot_components() figures with descriptive, model-identifying file
     names (matching the model-view / loss-curve plots) under
-    figures/[n<n>/]components/. File name:
+    figures/[n<n>/]components/<method>/. File name:
         <run_id>[_k<k>][_rank<rank>]_<view>.png
-    e.g. EmbedMLP_demb200_p0.1_n2_APD_k10_rank1_assignment.png. Returns the dir."""
-    out_dir = os.path.join(FIG_ROOT, n_seg(n_group), "components")
+    e.g. EmbedMLP_demb200_p0.1_n2_APD_k10_rank1_assignment.png. The per-method subdir
+    (parsed from the run_id) keeps each PD method's figures separate, matching the
+    loss_curves/<method>/ layout. Returns the dir."""
+    try:
+        method = parse_run_id(run_id)["method"]
+    except ValueError:
+        method = ""     # unparseable run_id -> fall back to the flat components/ dir
+    out_dir = os.path.join(FIG_ROOT, n_seg(n_group), "components", method)
     os.makedirs(out_dir, exist_ok=True)
     ktok = f"_k{k}" if k is not None else ""
     rtok = f"_rank{rank}" if rank is not None else ""

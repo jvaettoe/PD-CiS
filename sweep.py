@@ -39,7 +39,7 @@ D_EMBS = [1000, 200, 100, 50, 20]
 SMOKE_N_EXPS = [2]
 SMOKE_PS = ["0.1"]
 SMOKE_D_EMBS = [20, 100]
-SMOKE_STEPS = {"APD": 30, "OracleAPD": 15, "SPD": 30}
+SMOKE_STEPS = {"APD": 30, "OracleAPD": 15, "SPD": 30, "ExactPD": 1}
 SMOKE_BASE_STEPS = 200
 
 
@@ -126,9 +126,9 @@ def _run_method(model, dataset, spec, method, *, smoke, force,
         batch = min(decomp_fit.ORACLE_BATCH, batch_override or decomp_fit.ORACLE_BATCH)
     else:
         batch = batch_override or decomp_fit.DEFAULT_BATCH
-    # APD/OracleAPD use batch-top-k with k = expected active features (p*n_features);
-    # SPD has no k (stochastic gating).
-    k = k_for(spec["str_p"]) if method in ("APD", "OracleAPD") else None
+    # APD/OracleAPD/ExactPD use batch-top-k with k = expected active features
+    # (p*n_features); SPD has no k (stochastic gating).
+    k = k_for(spec["str_p"]) if method in ("APD", "OracleAPD", "ExactPD") else None
     loss_kwargs = decomp_fit.loss_kwargs_for(method, k=(k or 1), lp=LP)
 
     print(f"  [fit ] {run_id}  (steps={steps}, batch={batch})")
@@ -143,7 +143,8 @@ def _run_method(model, dataset, spec, method, *, smoke, force,
         "run_id": run_id, "model": spec["model"], "n_features": N_FEATURES,
         "d_emb": d_emb, "d_mlp": spec["model_kwargs"]["d_mlp"],
         "p": spec["str_p"], "n_exp": spec["n_exp"],
-        "method": method, "C": C, "k": k, "steps": steps,
+        # pd_obj.C, not the module C: ExactPD forces C = n_features.
+        "method": method, "C": pd_obj.C, "k": k, "steps": steps,
         "lr": decomp_fit.DEFAULT_LR, "batch_size": batch, "seed": SEED,
         "loss_kwargs": loss_kwargs,
     }
@@ -172,7 +173,7 @@ def _run_method(model, dataset, spec, method, *, smoke, force,
         f"{method} loss curves",
         n_group=spec["n_exp"],
         model=spec["model"], d_emb=d_emb, d_mlp=d_mlp, p=spec["str_p"], n_exp=spec["n_exp"],
-        method=method, C=C, k=k,
+        method=method, C=pd_obj.C, k=k,   # pd_obj.C (ExactPD: n_features), not module C
     )
 
 

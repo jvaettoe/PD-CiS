@@ -17,14 +17,16 @@ import results_io
 from cc import set_seed
 from data import SparseDataset
 from mlp import MLP
-from pd import PD, APD, OracleAPD, SPD
+from pd import PD, APD, OracleAPD, SPD, ExactPD
 
-METHODS = ("APD", "OracleAPD", "SPD")
+METHODS = ("APD", "OracleAPD", "SPD", "ExactPD")
 
 # Per-method step budgets. OracleAPD recomputes importance with C leave-one-out
 # forwards per step, so it gets far fewer steps than the gradient-attribution
-# methods. SPD's masks are stochastic and need longer to converge.
-METHOD_STEPS = {"APD": 3000, "OracleAPD": 500, "SPD": 5000}
+# methods. SPD's masks are stochastic and need longer to converge. ExactPD is the
+# handcoded ground truth -- its components are set analytically and frozen, so it
+# has no trainable params and needs a single eval pass to log its loss terms.
+METHOD_STEPS = {"APD": 3000, "OracleAPD": 500, "SPD": 5000, "ExactPD": 1}
 DEFAULT_LR = 1e-3
 DEFAULT_BATCH = 2048
 ORACLE_BATCH = 1024
@@ -66,6 +68,9 @@ def build_pd(method: str, model: MLP, C: int, rank: int = APD_RANK) -> PD:
         return OracleAPD(model, C, rank=rank)
     if method == "SPD":
         return SPD(model, C, param_specs=SPD_PARAM_SPECS)
+    if method == "ExactPD":
+        # C is ignored: ExactPD forces C = n_features (one component per feature).
+        return ExactPD(model)
     raise ValueError(f"Unknown method '{method}' (expected one of {METHODS})")
 
 
@@ -77,7 +82,7 @@ def loss_kwargs_for(method: str, k: int, lp: float = 1.0,
     `lp` here so it never collides with the data sparsity `p`, and map lp -> 'p'.
     `alpha_simplicity` downweights the Schatten-p term so reconstruction leads
     (see ALPHA_SIMPLICITY); pass a different value to sweep the balance."""
-    if method in ("APD", "OracleAPD"):
+    if method in ("APD", "OracleAPD", "ExactPD"):
         return {"alpha_faithfulness": 1.0, "k": k,
                 "alpha_minimality": 1.0, "alpha_simplicity": alpha_simplicity, "p": lp}
     if method == "SPD":
@@ -113,7 +118,9 @@ def fit_decomposition(
         set_seed(seed)  # reproducible PD init + SPD stochastic masks (global RNG)
 
     params = [p for p in pd_obj.parameters() if p.requires_grad]
-    opt = torch.optim.Adam(params, lr=lr)
+    # ExactPD (and any analytic decomposition) has no trainable params: skip the
+    # optimiser entirely and just evaluate the loss once per step to log its terms.
+    opt = torch.optim.Adam(params, lr=lr) if params else None
 
     curves: dict[str, list[float]] = defaultdict(list)
     pbar = tqdm(range(steps), desc=desc, disable=not progress)
@@ -121,12 +128,17 @@ def fit_decomposition(
         x, _ = dataset.generate_batch(batch_size)
         with torch.no_grad():
             target = pd_obj.model(x)  # frozen model output (pd=None dense path)
-        opt.zero_grad()
-        total, logs = pd_obj.loss(x, target, **loss_kwargs)
-        total.backward()
-        if grad_clip is not None:
-            torch.nn.utils.clip_grad_norm_(params, grad_clip)
-        opt.step()
+        if opt is not None:
+            opt.zero_grad()
+            total, logs = pd_obj.loss(x, target, **loss_kwargs)
+            total.backward()
+            if grad_clip is not None:
+                torch.nn.utils.clip_grad_norm_(params, grad_clip)
+            opt.step()
+        else:
+            # No trainable params, but APD's batch-top-k attribution still needs
+            # autograd (grad wrt the per-example gates), so DON'T wrap in no_grad.
+            _, logs = pd_obj.loss(x, target, **loss_kwargs)
         if step % log_every == 0:
             for name, value in logs.items():
                 curves[name].append(value)
