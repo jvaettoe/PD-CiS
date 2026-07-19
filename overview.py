@@ -270,6 +270,48 @@ def behavioural_ceiling_heatmap(n_exp, behav, device="cpu"):
     print(f"  saved {out}")
 
 
+def calibration_curves(n_exp, device="cpu"):
+    """Calibration-hypothesis test: fix each trained checkpoint and sweep the
+    EVALUATION density p_eval, plotting n_soft(p_eval). If a high-p-trained model
+    is calibrated to its dense operating point (the ceiling figure's negative
+    iso − in-dist cells), its curve should PEAK at its own training density and
+    fall off in both directions; a sparse-trained model should decline
+    monotonically with p_eval (classic interference); a representationally
+    limited model (d_emb=20) should sit low regardless."""
+    os.makedirs(OVERVIEW_FIG, exist_ok=True)
+    ntok = results_io._fmt_n(n_exp)
+    P_EVAL = [0.001, 0.003, 0.01, 0.03, 0.1, 0.2, 0.35, 0.5, 0.65, 0.8, 0.9]
+    panels = [("LinearMLP d_mlp=50 (calibration case)", "LinearMLP", None, 50),
+              ("EmbedMLP d_emb=20 d_mlp=50 (representational contrast)", "EmbedMLP", 20, 50)]
+    cmap = plt.get_cmap("viridis")
+
+    fig, axes = plt.subplots(1, 2, figsize=(12.5, 5.0), constrained_layout=True, sharey=True)
+    for ax, (title, mname, demb, d_mlp) in zip(axes, panels):
+        for i, p_train in enumerate(PS):
+            model = _load_trained(mname, demb, d_mlp, p_train, n_exp, device)
+            if model is None:
+                continue
+            ys = [float(model.per_feature_r2(pe).clamp(min=0).sum()) for pe in P_EVAL]
+            col = cmap(i / max(1, len(PS) - 1))
+            ax.plot(P_EVAL, ys, marker="o", ms=3.5, color=col,
+                    label=f"trained @ p={p_train}")
+            # enlarged marker at the model's own training density (predicted peak)
+            y_at = float(model.per_feature_r2(float(p_train)).clamp(min=0).sum())
+            ax.plot([float(p_train)], [y_at], marker="*", ms=15, color=col,
+                    markeredgecolor="k", markeredgewidth=0.5, zorder=5)
+        ax.set_xscale("log")
+        ax.set_xlabel("evaluation density p_eval (log)")
+        ax.set_title(title, fontsize=10)
+        ax.grid(True, alpha=0.3, which="both")
+        ax.legend(fontsize=8)
+    axes[0].set_ylabel("behavioural n_soft  (Σ max(0, R²))")
+    fig.suptitle(f"n_soft vs evaluation density (models FIXED; ★ = own training density) — "
+                 f"n={ntok}", fontsize=12)
+    out = os.path.join(OVERVIEW_FIG, f"calibration_curves_n{ntok}.png")
+    fig.savefig(out, dpi=140, bbox_inches="tight"); plt.close(fig)
+    print(f"  saved {out}")
+
+
 def _exactpd_counts(n_exp):
     """{(demb_label, d_mlp, p_float): effective_count} for ExactPD rows of
     component_metrics.csv (same source as effective_count_heatmap)."""
@@ -441,9 +483,13 @@ def main():
     ap.add_argument("--n", type=float, default=4.0, dest="n_exp")
     ap.add_argument("--no-biregular", action="store_true", dest="no_biregular",
                     help="skip the biregular K x variant grid (the slow part)")
+    ap.add_argument("--calibration", action="store_true",
+                    help="also run the evaluation-density calibration curves (targeted diagnostic)")
     ap.add_argument("--device", default="cpu")
     a = ap.parse_args()
     print(f"=== overview (n={results_io._fmt_n(a.n_exp)}) ===")
+    if a.calibration:
+        calibration_curves(a.n_exp, device=a.device)
     effective_count_heatmap(a.n_exp, device=a.device)
     behav = behavioural_count_heatmap(a.n_exp, device=a.device)
     behavioural_ceiling_heatmap(a.n_exp, behav, device=a.device)
