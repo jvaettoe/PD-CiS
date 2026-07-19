@@ -169,7 +169,8 @@ class CodeAnsatz:
         ac, bc = self.gains(abc)
         res = {"L4": model.reconstruction_loss(float(p), n_exp),
                "ac": ac, "bc": bc,
-               "eff_count": ExactPD(model).component_metrics()["effective_count"]}
+               "eff_count": ExactPD(model).component_metrics()["effective_count"],
+               "n_soft": float(model.per_feature_r2(p).clamp(min=0).sum())}
         self._eval_cache[key] = res
         return res
 

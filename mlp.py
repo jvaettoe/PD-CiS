@@ -125,6 +125,38 @@ class MLP(nn.Module, ABC):
         with torch.no_grad():
             return float(((self(x) - y).abs() ** n_exp).mean().item())
 
+    def per_feature_r2(self, p: float, *, batch: int = 8192, n_batches: int = 25,
+                       seed: int = 9999) -> Float[Tensor, "n_features"]:
+        """BEHAVIOURAL per-feature computation quality at sparsity p, with
+        superposition interference included (batches are drawn at p, so other
+        features co-activate exactly as in training).
+
+        For each feature i, the active-conditional MSE
+            MSE_i = E[(yhat_i - relu(x_i))^2 | x_i > 0]
+        is accumulated over `n_batches` fresh batches (the adjacent CiS repo's
+        evaluate_per_feature_mse convention: active = x_i > 0, err_sum/cnt
+        accumulation), then normalised against the always-predict-0 baseline:
+        given x_i > 0, x_i ~ U(0,1) and the target is x_i, so the baseline MSE is
+        E[x_i^2] = 1/3 EXACTLY. Returns
+            R2_i = 1 - MSE_i / (1/3)                    (n_features,)
+        R2_i ~ 1 = feature i computed cleanly; <= 0 = no better than outputting 0.
+        Callers derive counts: n_soft = sum(max(0, R2_i)) (threshold-free) or a
+        thresholded n_hard = #{R2_i > theta}. Model-only -- no decomposition --
+        so it is an independent check on ExactPD's effective_count."""
+        ds = CleanDataset(n_features=self.n_features, p=float(p),
+                          device=self.device, seed=seed)
+        err_sum = torch.zeros(self.n_features, device=self.device)
+        cnt = torch.zeros(self.n_features, device=self.device)
+        with torch.no_grad():
+            for _ in range(n_batches):
+                x, y = ds.generate_batch(batch)
+                yhat = self(x)
+                active = (x > 0).float()
+                err_sum += ((yhat - y) ** 2 * active).sum(dim=0)
+                cnt += active.sum(dim=0)
+        mse = err_sum / cnt.clamp_min(1)
+        return (1.0 - mse / (1.0 / 3.0)).detach()
+
     def plot_views(self, *, project: bool | None = None) -> dict:
         """The model's standard feature-space views as {name: Figure}: 'weights'
         (read-in/read-out), 'effective' (feature->feature map), 'bars' (per-neuron
