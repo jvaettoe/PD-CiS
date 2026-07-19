@@ -208,6 +208,68 @@ def behavioural_count_heatmap(n_exp, device="cpu"):
     return behav
 
 
+def behavioural_ceiling_heatmap(n_exp, behav, device="cpu"):
+    """Isolated (exactly-one-active-feature) behavioural count per cell -- what each
+    trained checkpoint computes with NO other features active -- and its difference
+    from the in-distribution count (`behav`, from behavioural_count_heatmap).
+
+    Interpretation is two-sided: positive difference (iso > in-dist) = features lost
+    to superposition interference at the training p; NEGATIVE difference = the model
+    is calibrated to its dense training operating point, so the isolated eval is
+    off-distribution for it (observed for high-p d_mlp=50 models, whose isolated
+    count lands near ExactPD's effective_count -- mass concentration tracks what
+    works in isolation)."""
+    os.makedirs(OVERVIEW_FIG, exist_ok=True)
+    ntok = results_io._fmt_n(n_exp)
+    row_specs = [("LinearMLP", "LinearMLP", None)] + \
+                [(str(d), "EmbedMLP", d) for d in sorted(D_EMBS)]
+    fig, axes = plt.subplots(2, len(D_MLPS), figsize=(5.5 * len(D_MLPS), 9.0),
+                             squeeze=False, constrained_layout=True)
+    for col, d_mlp in enumerate(D_MLPS):
+        ISO = np.full((len(row_specs), len(PS)), np.nan)
+        for i, (label, mname, demb) in enumerate(row_specs):
+            for j, p in enumerate(PS):
+                model = _load_trained(mname, demb, d_mlp, p, n_exp, device)
+                if model is None:
+                    continue
+                r2 = model.per_feature_r2(float(p), isolated=True)
+                ISO[i, j] = float(r2.clamp(min=0).sum())
+        IND = np.full_like(ISO, np.nan)
+        for i, (label, _, _) in enumerate(row_specs):
+            for j, p in enumerate(PS):
+                v = behav.get((label, d_mlp, float(p)))
+                if v is not None:
+                    IND[i, j] = v
+        DIFF = ISO - IND
+
+        for row, (A, cmap, vmin, vmax, ttl) in enumerate([
+                (ISO, "viridis", 0, N_FEATURES, f"isolated n_soft (single active)  d_mlp={d_mlp}"),
+                (DIFF, "coolwarm", -60, 60, f"iso − in-dist  d_mlp={d_mlp}")]):
+            ax = axes[row][col]
+            im = ax.imshow(A, aspect="auto", cmap=cmap, vmin=vmin, vmax=vmax)
+            ax.set_xticks(range(len(PS)), PS)
+            ax.set_yticks(range(len(row_specs)), [r[0] for r in row_specs])
+            ax.set_title(ttl, fontsize=10)
+            if row == 1:
+                ax.set_xlabel("data sparsity p")
+            for i in range(A.shape[0]):
+                for j in range(A.shape[1]):
+                    if np.isfinite(A[i, j]):
+                        dark = (A[i, j] < 0.6 * N_FEATURES) if row == 0 else (abs(A[i, j]) > 35)
+                        ax.text(j, i, f"{A[i, j]:.0f}", ha="center", va="center",
+                                color="w" if dark else "k", fontsize=8)
+            fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+    axes[0][0].set_ylabel("model (d_emb; LinearMLP = no embedding)")
+    axes[1][0].set_ylabel("model (d_emb; LinearMLP = no embedding)")
+    fig.suptitle(f"Interference-free ceiling vs in-distribution behavioural count — n={ntok}\n"
+                 f"top: what each trained model computes in isolation;  bottom: iso − in-dist "
+                 f"(+ = lost to interference, − = calibrated to dense operating point)",
+                 fontsize=11)
+    out = os.path.join(OVERVIEW_FIG, f"behavioural_ceiling_n{ntok}.png")
+    fig.savefig(out, dpi=140, bbox_inches="tight"); plt.close(fig)
+    print(f"  saved {out}")
+
+
 def _exactpd_counts(n_exp):
     """{(demb_label, d_mlp, p_float): effective_count} for ExactPD rows of
     component_metrics.csv (same source as effective_count_heatmap)."""
@@ -239,6 +301,7 @@ def count_agreement_scatter(n_exp, behav, device="cpu", include_biregular=True):
         ax.scatter([x], [y], marker=marker, s=45, alpha=0.8,
                    color=colors[d_mlp], label=lab)
 
+    divergent = []   # (|x-y|, x, y, label, d_mlp, pf)
     for (label, d_mlp, pf), x in behav.items():
         y = exact.get((label, d_mlp, pf))
         if y is None:
@@ -246,17 +309,38 @@ def count_agreement_scatter(n_exp, behav, device="cpu", include_biregular=True):
         marker = "s" if label == "LinearMLP" else "o"
         scat(x, y, d_mlp, marker, (marker, d_mlp),
              f"{'LinearMLP' if marker == 's' else 'EmbedMLP'} d_mlp={d_mlp}")
-        # annotate the strongly divergent points (|x - y| > 25)
-        if abs(x - y) > 25:
-            ax.annotate(f"{'Lin' if label == 'LinearMLP' else 'd_emb=' + label} p={pf:g}",
-                        (x, y), fontsize=6, xytext=(4, 3), textcoords="offset points")
+        if abs(x - y) > 20:
+            divergent.append((abs(x - y), x, y, label, d_mlp, pf))
+
+    # Annotate ONLY the most divergent point per (model row, d_mlp) -- pruned and
+    # stagger-offset (alternating above/below in x-order), so the dense top band
+    # doesn't smear into unreadable overlapping labels.
+    best = {}
+    for d, x, y, label, d_mlp, pf in divergent:
+        key = (label, d_mlp)
+        if key not in best or d > best[key][0]:
+            best[key] = (d, x, y, label, d_mlp, pf)
+    for rank, (d, x, y, label, d_mlp, pf) in enumerate(sorted(best.values(), key=lambda t: t[1])):
+        off = (4, 5) if rank % 2 == 0 else (4, -11)
+        name = "LinearMLP" if label == "LinearMLP" else f"d_emb={label}"
+        ax.annotate(f"{name} p={pf:g}", (x, y), fontsize=7,
+                    xytext=off, textcoords="offset points")
 
     if include_biregular:
+        bireg_pts = []
         for key, code in sorted(_ANSATZE.items()):
             for (pf, _, _), res in code._eval_cache.items():
                 if "n_soft" in res:
                     scat(res["n_soft"], res["eff_count"], 50, "^", ("^", 50, "bireg"),
                          "biregular codes (N=50)")
+                    bireg_pts.append((res["n_soft"], res["eff_count"]))
+        # one summary label for the cluster (they all sit near eff_count ~ 99-100)
+        div = [(x, y) for x, y in bireg_pts if abs(x - y) > 20]
+        if div:
+            bx = min(x for x, _ in div)
+            by = max(y for _, y in div)
+            ax.annotate("biregular codes", (bx, by), fontsize=7, style="italic",
+                        xytext=(-6, 8), textcoords="offset points", ha="left")
 
     lim = [0, N_FEATURES * 1.05]
     ax.plot(lim, lim, "k--", lw=1, alpha=0.6, label="y = x (agreement)")
@@ -362,6 +446,7 @@ def main():
     print(f"=== overview (n={results_io._fmt_n(a.n_exp)}) ===")
     effective_count_heatmap(a.n_exp, device=a.device)
     behav = behavioural_count_heatmap(a.n_exp, device=a.device)
+    behavioural_ceiling_heatmap(a.n_exp, behav, device=a.device)
     if not a.no_biregular:
         biregular_overview(a.n_exp, device=a.device)   # fills the fit cache (incl. n_soft)
     count_agreement_scatter(a.n_exp, behav, device=a.device,

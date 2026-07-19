@@ -126,10 +126,17 @@ class MLP(nn.Module, ABC):
             return float(((self(x) - y).abs() ** n_exp).mean().item())
 
     def per_feature_r2(self, p: float, *, batch: int = 8192, n_batches: int = 25,
-                       seed: int = 9999) -> Float[Tensor, "n_features"]:
+                       seed: int = 9999, isolated: bool = False) -> Float[Tensor, "n_features"]:
         """BEHAVIOURAL per-feature computation quality at sparsity p, with
         superposition interference included (batches are drawn at p, so other
         features co-activate exactly as in training).
+
+        `isolated=True` instead draws exactly ONE active feature per example
+        (CleanDataset's exactly_one_active_feature mode; `p` is then unused by the
+        generator) -- the INTERFERENCE-FREE ceiling: what the model can compute
+        when nothing else is active. ceiling - in-distribution = features lost to
+        superposition interference. The R^2 normalisation is unchanged (value is
+        U(-1,1) either way, so the active-conditional baseline stays 1/3).
 
         For each feature i, the active-conditional MSE
             MSE_i = E[(yhat_i - relu(x_i))^2 | x_i > 0]
@@ -144,7 +151,8 @@ class MLP(nn.Module, ABC):
         thresholded n_hard = #{R2_i > theta}. Model-only -- no decomposition --
         so it is an independent check on ExactPD's effective_count."""
         ds = CleanDataset(n_features=self.n_features, p=float(p),
-                          device=self.device, seed=seed)
+                          device=self.device, seed=seed,
+                          exactly_one_active_feature=isolated)
         err_sum = torch.zeros(self.n_features, device=self.device)
         cnt = torch.zeros(self.n_features, device=self.device)
         with torch.no_grad():
