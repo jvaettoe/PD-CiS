@@ -59,6 +59,13 @@ def _pinv_wout(M):
     return np.linalg.pinv(M.T.astype(np.float64)).T.astype(np.float32)
 
 
+def _sq_overlap(M):
+    """(sum(overlap^2), max overlap) over feature pairs — the reduce_overlap objective."""
+    ov = M.astype(int) @ M.astype(int).T
+    np.fill_diagonal(ov, 0)
+    return int((ov ** 2).sum()), int(ov.max())
+
+
 def model_from_abc(M, abc, device="cpu"):
     """Build a LinearMLP(F, N) from a code M and scalars (a, b, c): w_in = a*M + b*(1-M),
     w_out = c * (pinv(M.T)).T (the scaled-pseudoinverse decoder)."""
@@ -214,6 +221,9 @@ def main():
     ap.add_argument("--ps", type=float, nargs="+", default=PS_SWEEP,
                     help=f"p values for the sweep (default {PS_SWEEP})")
     ap.add_argument("--top", type=int, default=16, help="# top components in the detail views")
+    ap.add_argument("--swaps", type=int, default=0,
+                    help="reduce_overlap iterations (0 = no overlap minimisation; "
+                         "the source repo's overlap-min setting is 800000)")
     ap.add_argument("--fit-steps", type=int, default=4000, dest="fit_steps")
     ap.add_argument("--a", type=float, default=None, help="fix a (skip refit; also needs --b --c)")
     ap.add_argument("--b", type=float, default=None)
@@ -225,11 +235,20 @@ def main():
         ap.error("--a requires --b and --c (fixing the ansatz scalars skips the refit)")
     fixed_abc = None if a.a is None else (a.a, a.b, a.c)
     M = (codes.regular_code if a.family == "regular" else codes.random_code)(F, N, a.K, a.seed)
-    base = f"biregular_{a.family}_K{a.K}_seed{a.seed}"
+    if a.swaps > 0:
+        # overlap minimisation: degree-preserving edge swaps lowering sum(overlap^2)
+        # (source convention: reduce_overlap(base, swaps, seed=10+seed)).
+        ov0 = _sq_overlap(M)
+        M = codes.reduce_overlap(M, a.swaps, seed=10 + a.seed)
+        ov1 = _sq_overlap(M)
+        print(f"  overlap-min ({a.swaps} swaps): sum(ov^2) {ov0[0]} -> {ov1[0]}, "
+              f"maxov {ov0[1]} -> {ov1[1]}")
+    swap_tok = f"_swap{a.swaps}" if a.swaps > 0 else ""
+    base = f"biregular_{a.family}{swap_tok}_K{a.K}_seed{a.seed}"
     os.makedirs(FIG_ROOT, exist_ok=True)
 
     d = M.sum(0)
-    print(f"biregular ansatz  F={F} N={N} K={a.K} seed={a.seed} family={a.family}")
+    print(f"biregular ansatz  F={F} N={N} K={a.K} seed={a.seed} family={a.family} swaps={a.swaps}")
     print(f"  code: feature deg = {int(M.sum(1)[0])} (all K); neuron deg range = "
           f"[{int(d.min())}, {int(d.max())}]  (biregular => uniform)")
     print("  decoder W_out = c * pinv(M.T) (scaled pseudoinverse of the code; only a,b,c fit)")
