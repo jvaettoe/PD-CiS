@@ -48,7 +48,7 @@ def main():
         d_mlp = meta["model_config"].get("d_mlp")
         demb_tok = str(d_emb) if is_embed else "NA"
 
-        figs = figutil.plot_model_views(model, is_embed=is_embed)   # weights/effective/bars
+        figs = model.plot_views()   # weights/effective/bars
         figs["io"] = model.plot_input_output_behaviour()
         for view, fig in figs.items():
             figutil.save_fig(

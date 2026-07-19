@@ -82,8 +82,7 @@ def iter_model_specs(smoke: bool = False, n_exps=None, drop_demb=None, d_mlp=D_M
 def _emit_model_figures(model, spec):
     """Feature-space views of the trained model (method-independent, one set per
     model). Filenames + titles carry the model params."""
-    is_embed = spec["model"] == "EmbedMLP"
-    figs = figutil.plot_model_views(model, is_embed=is_embed)
+    figs = model.plot_views()
     demb = _demb_tok(spec["d_emb"])
     d_mlp = spec["model_kwargs"]["d_mlp"]
     n_tok = results_io._fmt_n(spec["n_exp"])

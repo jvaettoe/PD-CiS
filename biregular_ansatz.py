@@ -34,7 +34,6 @@ import torch
 
 import codes
 import decomp_fit
-import figutil
 from data import CleanDataset
 from mlp import LinearMLP
 from pd import ExactPD
@@ -54,76 +53,134 @@ REF_ABC_P002 = {4: (0.8689, -0.0230, 1.7413), 5: (0.8804, -0.0264, 1.7333),
 FIG_ROOT = os.path.join(os.path.dirname(__file__), "figures", "biregular")
 
 
-def _pinv_wout(M):
-    """Our-convention decoder base (unscaled): w_out = (pinv(M.T)).T, shape (N, F)."""
-    return np.linalg.pinv(M.T.astype(np.float64)).T.astype(np.float32)
+class CodeAnsatz:
+    """A designed binary code plus its 3-scalar ansatz -- the single owner of the
+    biregular-benchmark state that used to be smeared across free functions and
+    module-level caches.
+
+    State: the (F, N) boolean code `M` (regular_code / random_code, optionally
+    overlap-minimised via codes.reduce_overlap), its identity (family, K, seed,
+    swaps), the fixed decoder base pinv(M.T) (cached), and per-p (a, b, c) fits
+    (cached). The 3-scalar model is
+        w_in = a*M + b*(1-M),   w_out = c * (pinv(M.T)).T
+    i.e. the decoder stays a scaled pseudoinverse of the code; only a, b, c are
+    fit (to L4). `model()` returns a plain LinearMLP, so this class sits BESIDE
+    the MLP hierarchy (a factory + bookkeeping), not inside it."""
+
+    def __init__(self, K: int, *, family: str = "regular", seed: int = 0, swaps: int = 0,
+                 n_features: int = F, n_neurons: int = N):
+        self.K, self.family, self.seed, self.swaps = K, family, seed, swaps
+        self.F, self.N = n_features, n_neurons
+        code_fn = codes.regular_code if family == "regular" else codes.random_code
+        M = code_fn(n_features, n_neurons, K, seed)
+        self.sq_overlap_pre = self._sq_overlap(M)   # before overlap-min (== after if swaps=0)
+        if swaps > 0:
+            # source convention: reduce_overlap(base, swaps, seed=10+seed)
+            M = codes.reduce_overlap(M, swaps, seed=10 + seed)
+        self.M = M
+        self._pinv = None            # decoder base, computed once on demand
+        self._abc_cache: dict = {}   # (p, steps) -> (a, b, c)
+        self._eval_cache: dict = {}  # (p, n_exp, fit_steps) -> {L4, ac, bc, eff_count}
+
+    @property
+    def name(self) -> str:
+        """Filename base token; stamps every identifying param (kept byte-identical
+        to the historic format so re-renders overwrite rather than duplicate)."""
+        swap_tok = f"_swap{self.swaps}" if self.swaps > 0 else ""
+        return f"biregular_{self.family}{swap_tok}_K{self.K}_seed{self.seed}"
+
+    @staticmethod
+    def _sq_overlap(M) -> tuple[int, int]:
+        """(sum(overlap^2), max overlap) over feature pairs — the reduce_overlap objective."""
+        ov = M.astype(int) @ M.astype(int).T
+        np.fill_diagonal(ov, 0)
+        return int((ov ** 2).sum()), int(ov.max())
+
+    def sq_overlap(self) -> tuple[int, int]:
+        return self._sq_overlap(self.M)
+
+    def pinv_wout(self) -> np.ndarray:
+        """Our-convention decoder base (unscaled): w_out = (pinv(M.T)).T, shape (N, F)."""
+        if self._pinv is None:
+            self._pinv = np.linalg.pinv(self.M.T.astype(np.float64)).T.astype(np.float32)
+        return self._pinv
+
+    def model(self, abc, device="cpu") -> LinearMLP:
+        """Build the LinearMLP(F, N) for scalars (a, b, c)."""
+        a, b, c = abc
+        Mf = self.M.astype(np.float64)
+        w_in = (a * Mf + b * (1.0 - Mf)).astype(np.float32)      # (F, N)
+        w_out = (c * self.pinv_wout()).astype(np.float32)         # (N, F)
+        model = LinearMLP(n_features=self.F, d_mlp=self.N, device=device)
+        with torch.no_grad():
+            model.w_in.copy_(torch.from_numpy(w_in).to(device))
+            model.w_out.copy_(torch.from_numpy(w_out).to(device))
+        return model
+
+    @staticmethod
+    def gains(abc) -> tuple[float, float]:
+        """The gauge-invariant effective through-gains (a*c on-code, b*c off-code) --
+        the only determined quantities under the ReLU rescaling (a,b,c)->(λa,λb,c/λ)."""
+        a, b, c = abc
+        return a * c, b * c
+
+    def fit_abc(self, p: float, *, steps: int = 4000, batch: int = 4096, pool: int = 131072,
+                lr: float = 0.01, device: str = "cpu", seed: int = 31337):
+        """Fit (a, b, c) to L4 loss for the FIXED code at sparsity p (port of the
+        adjacent train_3param). The decoder base pinv(M.T) is fixed -- only the 3
+        scalars are learned. Adam + cosine LR; ONE pre-generated data pool sampled
+        by index (batch regen, not the tiny matmul, was the per-step cost).
+        Cached by (p, steps)."""
+        key = (float(p), steps)
+        if key in self._abc_cache:
+            return self._abc_cache[key]
+        Mf = torch.tensor(self.M.astype(np.float32), device=device)      # (F, N)
+        PINV = torch.tensor(self.pinv_wout(), device=device)             # (N, F) decoder base
+        ds = CleanDataset(n_features=self.F, p=p, device=device, seed=seed)
+        x_pool, y_pool = ds.generate_batch(pool)                         # generated ONCE
+        gen = torch.Generator(device=device).manual_seed(seed)
+        a = torch.tensor(0.85, device=device, requires_grad=True)
+        b = torch.tensor(-0.04, device=device, requires_grad=True)
+        c = torch.tensor(1.9, device=device, requires_grad=True)
+        opt = torch.optim.Adam([a, b, c], lr=lr)
+        sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, steps)
+        for _ in range(steps):
+            idx = torch.randint(0, pool, (batch,), device=device, generator=gen)
+            x, y = x_pool[idx], y_pool[idx]
+            w_in = a * Mf + b * (1 - Mf)
+            loss = ((torch.relu(x @ w_in) @ (c * PINV) - y).abs() ** 4).mean()
+            opt.zero_grad()
+            loss.backward()
+            opt.step()
+            sched.step()
+        abc = (float(a), float(b), float(c))
+        self._abc_cache[key] = abc
+        return abc
+
+    def fit_eval(self, p: float, n_exp: float, *, fit_steps: int = 2500,
+                 device: str = "cpu") -> dict:
+        """Refit at p and evaluate: {L4, ac, bc, eff_count} (held-out L_n, the
+        gauge-invariant gains, and ExactPD's effective_count). Cached."""
+        key = (float(p), float(n_exp), fit_steps)
+        if key in self._eval_cache:
+            return self._eval_cache[key]
+        abc = self.fit_abc(p, steps=fit_steps, device=device)
+        model = self.model(abc, device=device)
+        ac, bc = self.gains(abc)
+        res = {"L4": model.reconstruction_loss(float(p), n_exp),
+               "ac": ac, "bc": bc,
+               "eff_count": ExactPD(model).component_metrics()["effective_count"]}
+        self._eval_cache[key] = res
+        return res
 
 
-def _sq_overlap(M):
-    """(sum(overlap^2), max overlap) over feature pairs — the reduce_overlap objective."""
-    ov = M.astype(int) @ M.astype(int).T
-    np.fill_diagonal(ov, 0)
-    return int((ov ** 2).sum()), int(ov.max())
-
-
-def model_from_abc(M, abc, device="cpu"):
-    """Build a LinearMLP(F, N) from a code M and scalars (a, b, c): w_in = a*M + b*(1-M),
-    w_out = c * (pinv(M.T)).T (the scaled-pseudoinverse decoder)."""
-    a, b, c = abc
-    Mf = M.astype(np.float64)
-    w_in = (a * Mf + b * (1.0 - Mf)).astype(np.float32)     # (F, N)
-    w_out = (c * _pinv_wout(M)).astype(np.float32)           # (N, F)
-    model = LinearMLP(n_features=F, d_mlp=N, device=device)
-    with torch.no_grad():
-        model.w_in.copy_(torch.from_numpy(w_in).to(device))
-        model.w_out.copy_(torch.from_numpy(w_out).to(device))
-    return model
-
-
-def fit_abc(M, p, steps=4000, batch=4096, pool=131072, lr=0.01, device="cpu", seed=31337):
-    """Fit (a, b, c) to L4 loss for the FIXED code M at sparsity p (port of the adjacent
-    train_3param). The decoder base pinv(M.T) is fixed -- only the 3 scalars are learned,
-    so W_out stays a scaled pseudoinverse of the code. Adam + cosine LR.
-
-    Pre-generates ONE data pool and samples minibatches by index (as the source does),
-    instead of regenerating a random batch every step -- the batch generation, not the
-    tiny matmul, was the dominant per-step cost."""
-    Mf = torch.tensor(M.astype(np.float32), device=device)               # (F, N)
-    PINV = torch.tensor(_pinv_wout(M), device=device)                    # (N, F) decoder base
-    ds = CleanDataset(n_features=F, p=p, device=device, seed=seed)
-    x_pool, y_pool = ds.generate_batch(pool)                             # generated ONCE
-    gen = torch.Generator(device=device).manual_seed(seed)
-    a = torch.tensor(0.85, device=device, requires_grad=True)
-    b = torch.tensor(-0.04, device=device, requires_grad=True)
-    c = torch.tensor(1.9, device=device, requires_grad=True)
-    opt = torch.optim.Adam([a, b, c], lr=lr)
-    sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, steps)
-    for _ in range(steps):
-        idx = torch.randint(0, pool, (batch,), device=device, generator=gen)
-        x, y = x_pool[idx], y_pool[idx]
-        w_in = a * Mf + b * (1 - Mf)
-        loss = ((torch.relu(x @ w_in) @ (c * PINV) - y).abs() ** 4).mean()
-        opt.zero_grad()
-        loss.backward()
-        opt.step()
-        sched.step()
-    return float(a), float(b), float(c)
-
-
-def l4_loss(model, p=P, seed=9999, batch=4096, device="cpu"):
-    """L4 reconstruction loss on a fresh sparse batch at sparsity p."""
-    ds = CleanDataset(n_features=F, p=p, device=device, seed=seed)
-    x, y = ds.generate_batch(batch)
-    with torch.no_grad():
-        return ((model(x) - y).abs() ** 4).mean().item()
-
-
-def render_cell(model, M, base, family, p, k, top, out_dir, device="cpu"):
+def render_cell(model, code: CodeAnsatz, p, k, top, out_dir, device="cpu"):
     """Render the FULL viz suite for one (model, p) cell and return its loss terms.
 
     Weight pictures (model.plot_weights, code + effective map) + the ExactPD component
     suite incl. the p-dependent `usage` view (batch-top-k at k). Every filename is
-    stamped `{base}_p{p}_k{k}_<view>.png`."""
+    stamped `{code.name}_p{p}_k{k}_<view>.png`."""
+    M, base, family = code.M, code.name, code.family
     cell = f"{base}_p{p:g}_k{k}"
 
     fig = model.plot_weights()
@@ -145,6 +202,8 @@ def render_cell(model, M, base, family, p, k, top, out_dir, device="cpu"):
     plt.close(fig)
 
     pd_obj = ExactPD(model)
+    # One seed-0 dataset, TWO sequential draws (usage batch, then the loss-eval batch
+    # below) -- kept explicit rather than sample_usage_stats so the draws stay coupled.
     ds = CleanDataset(n_features=F, p=p, device=device, seed=0)
     xb, _ = ds.generate_batch(1024)
     with torch.no_grad():
@@ -152,7 +211,7 @@ def render_cell(model, M, base, family, p, k, top, out_dir, device="cpu"):
     usage = pd_obj.usage_stats(xb, tb, k)   # batch-top-k selection at this p/k (p-dependent)
     params = {"model": f"biregular-{family}", "p": f"{p:g}", "method": "ExactPD",
               "C": pd_obj.C, "k": k}
-    figs = figutil.plot_components(pd_obj, top=top, params=params, usage=usage)
+    figs = pd_obj.plot_components(top=top, params=params, usage=usage)
     for name, f in figs.items():
         f.savefig(os.path.join(out_dir, f"{cell}_ExactPD_{name}.png"), dpi=130, bbox_inches="tight")
         plt.close(f)
@@ -161,7 +220,7 @@ def render_cell(model, M, base, family, p, k, top, out_dir, device="cpu"):
     with torch.no_grad():
         t2 = model(x2)
     _, logs = pd_obj.loss(x2, t2, **decomp_fit.loss_kwargs_for("ExactPD", k=k))
-    logs["L4"] = l4_loss(model, p=p, device=device)   # held-out (seed 9999) batch
+    logs["L4"] = model.reconstruction_loss(p, 4.0, batch=4096, seed=9999)  # held-out batch
     return logs
 
 
@@ -234,32 +293,28 @@ def main():
     if a.a is not None and (a.b is None or a.c is None):
         ap.error("--a requires --b and --c (fixing the ansatz scalars skips the refit)")
     fixed_abc = None if a.a is None else (a.a, a.b, a.c)
-    M = (codes.regular_code if a.family == "regular" else codes.random_code)(F, N, a.K, a.seed)
+    code = CodeAnsatz(a.K, family=a.family, seed=a.seed, swaps=a.swaps)
     if a.swaps > 0:
-        # overlap minimisation: degree-preserving edge swaps lowering sum(overlap^2)
-        # (source convention: reduce_overlap(base, swaps, seed=10+seed)).
-        ov0 = _sq_overlap(M)
-        M = codes.reduce_overlap(M, a.swaps, seed=10 + a.seed)
-        ov1 = _sq_overlap(M)
+        ov0, ov1 = code.sq_overlap_pre, code.sq_overlap()
         print(f"  overlap-min ({a.swaps} swaps): sum(ov^2) {ov0[0]} -> {ov1[0]}, "
               f"maxov {ov0[1]} -> {ov1[1]}")
-    swap_tok = f"_swap{a.swaps}" if a.swaps > 0 else ""
-    base = f"biregular_{a.family}{swap_tok}_K{a.K}_seed{a.seed}"
+    base = code.name
     os.makedirs(FIG_ROOT, exist_ok=True)
 
-    d = M.sum(0)
+    d = code.M.sum(0)
     print(f"biregular ansatz  F={F} N={N} K={a.K} seed={a.seed} family={a.family} swaps={a.swaps}")
-    print(f"  code: feature deg = {int(M.sum(1)[0])} (all K); neuron deg range = "
+    print(f"  code: feature deg = {int(code.M.sum(1)[0])} (all K); neuron deg range = "
           f"[{int(d.min())}, {int(d.max())}]  (biregular => uniform)")
     print("  decoder W_out = c * pinv(M.T) (scaled pseudoinverse of the code; only a,b,c fit)")
 
     ps = a.ps if a.p_sweep else [a.p]
     rows = []
     for p in ps:
-        abc = fixed_abc if fixed_abc is not None else fit_abc(M, p, steps=a.fit_steps, device=a.device)
-        model = model_from_abc(M, abc, device=a.device)
+        abc = fixed_abc if fixed_abc is not None else code.fit_abc(p, steps=a.fit_steps,
+                                                                   device=a.device)
+        model = code.model(abc, device=a.device)
         k = max(1, min(F - 1, round(p * F)))
-        logs = render_cell(model, M, base, a.family, p, k, a.top, FIG_ROOT, device=a.device)
+        logs = render_cell(model, code, p, k, a.top, FIG_ROOT, device=a.device)
         rows.append({"p": p, "k": k, "a": abc[0], "b": abc[1], "c": abc[2], **logs})
         tag = "[fit]" if fixed_abc is None else "[fixed]"
         print(f"  p={p:<6} k={k:<3} {tag} (a,b,c)=({abc[0]:.4f},{abc[1]:.4f},{abc[2]:.4f})  "

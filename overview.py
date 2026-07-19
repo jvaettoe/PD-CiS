@@ -22,15 +22,11 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import torch
 
 import cc
 import results_io
 import biregular_ansatz as bir
-import codes
-from data import CleanDataset
 from mlp import LinearMLP, EmbedMLP
-from pd import ExactPD
 from sweep import N_FEATURES, D_EMBS, PS, D_MLP   # track the sweep grid
 
 D_MLPS = [50, 100]
@@ -45,14 +41,6 @@ OVERVIEW_RES = os.path.join(os.path.dirname(__file__), "results", "overview")
 # (b) model reconstruction-loss tables
 # --------------------------------------------------------------------------
 
-def eval_ln(model, p, n_exp, device="cpu", batch=16384, seed=12345):
-    """L_n reconstruction loss = mean(|model(x) - relu(x)|**n) on a held-out batch."""
-    ds = CleanDataset(n_features=N_FEATURES, p=float(p), device=device, seed=seed)
-    x, y = ds.generate_batch(batch)
-    with torch.no_grad():
-        return float(((model(x) - y).abs() ** n_exp).mean().item())
-
-
 def trained_l4(model_name, d_emb, d_mlp, str_p, n_exp, device="cpu"):
     """Load the cached n_exp checkpoint for (model, d_emb, d_mlp, p) and eval its L_n."""
     if model_name == "LinearMLP":
@@ -63,40 +51,20 @@ def trained_l4(model_name, d_emb, d_mlp, str_p, n_exp, device="cpu"):
     if not os.path.exists(path):
         return float("nan")
     model = cc.load_checkpoint(path, device=device)["model"]
-    return eval_ln(model, str_p, n_exp, device=device)
+    return model.reconstruction_loss(float(str_p), n_exp)
 
 
-# Codes and per-p fits are cached so the model table, biregular table, gains figure
-# and effective_count heatmap all share one fit per (K, swaps, p).
-_CODE_CACHE: dict = {}
-_FIT_CACHE: dict = {}
+# One CodeAnsatz per (K, swaps): each instance caches its code, pinv base and per-p
+# fits, so the model table, biregular table, gains figure and effective_count heatmap
+# all share one fit per (K, swaps, p).
+_ANSATZE: dict = {}
 
 
-def _bireg_code(K, swaps, seed=0):
-    """Biregular code, optionally overlap-minimised (source convention seed=10+seed)."""
+def _ansatz(K, swaps, seed=0) -> "bir.CodeAnsatz":
     key = (K, swaps, seed)
-    if key not in _CODE_CACHE:
-        M = codes.regular_code(N_FEATURES, 50, K, seed)
-        if swaps > 0:
-            M = codes.reduce_overlap(M, swaps, seed=10 + seed)
-        _CODE_CACHE[key] = M
-    return _CODE_CACHE[key]
-
-
-def bireg_fit_eval(str_p, K, n_exp, swaps=0, fit_steps=2500, device="cpu"):
-    """Refit the (K, swaps) biregular ansatz at sparsity p; return
-    {L4, ac, bc, eff_count} (gauge-invariant gains + ExactPD effective_count)."""
-    key = (K, swaps, str_p, fit_steps)
-    if key in _FIT_CACHE:
-        return _FIT_CACHE[key]
-    M = _bireg_code(K, swaps)
-    a, b, c = bir.fit_abc(M, float(str_p), steps=fit_steps, device=device)
-    model = bir.model_from_abc(M, (a, b, c), device=device)
-    res = {"L4": eval_ln(model, str_p, n_exp, device=device),
-           "ac": a * c, "bc": b * c,
-           "eff_count": ExactPD(model).component_metrics()["effective_count"]}
-    _FIT_CACHE[key] = res
-    return res
+    if key not in _ANSATZE:
+        _ANSATZE[key] = bir.CodeAnsatz(K, swaps=swaps, seed=seed)
+    return _ANSATZE[key]
 
 
 def build_loss_table(n_exp, d_mlp, device="cpu", include_biregular=True):
@@ -109,7 +77,7 @@ def build_loss_table(n_exp, d_mlp, device="cpu", include_biregular=True):
     if include_biregular:
         for vname, sw in BIREG_VARIANTS:
             label = f"biregular K{BIREG_K} {vname} (N=50)"
-            rows[label] = {p: bireg_fit_eval(p, BIREG_K, n_exp, swaps=sw, device=device)["L4"]
+            rows[label] = {p: _ansatz(BIREG_K, sw).fit_eval(float(p), n_exp, device=device)["L4"]
                            for p in PS}
     df = pd.DataFrame(rows).T          # rows=model, cols=p
     df = df[PS]                         # column order = sweep p order
@@ -204,7 +172,7 @@ def biregular_overview(n_exp, device="cpu"):
     grid = {}   # (K, vname) -> {p: res}
     for K in K_LIST:
         for vname, sw in BIREG_VARIANTS:
-            grid[(K, vname)] = {p: bireg_fit_eval(p, K, n_exp, swaps=sw, device=device)
+            grid[(K, vname)] = {p: _ansatz(K, sw).fit_eval(float(p), n_exp, device=device)
                                 for p in PS}
             print(f"  [bireg] K={K} {vname}: fitted {len(PS)} p")
 

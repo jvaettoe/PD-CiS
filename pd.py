@@ -7,13 +7,18 @@ from torch import Tensor
 from torch.func import functional_call
 from jaxtyping import Float, Int
 
+from data import CleanDataset
+from pd_viz import PDViz
 
-class PD(nn.Module, ABC):
+
+class PD(PDViz, nn.Module, ABC):
     """
     Base class for PD methods (APD, SPD, ...).
     Subclasses to implement:
-        - `masked_weight(name, mask)` 
+        - `masked_weight(name, mask)`
         - `method_loss_terms(...)`
+    Plot methods (plot_components, plot_faithfulness, ...) come from the stateless
+    PDViz mixin (pd_viz.py), which owns the matplotlib dependency.
     """
     init_scale: float = 0.01  # std of freshly initialized components
 
@@ -336,6 +341,42 @@ class PD(nn.Module, ABC):
             "mean_diagonal_share": float(diag_share[used].mean().item()) if used.any() else 0.0,
         }
 
+    # ---- faithfulness analysis: how well the decomposition reconstructs the model ----
+
+    def effective_reconstruction(self) -> tuple[Float[Tensor, "n_features n_features"],
+                                                Float[Tensor, "n_features n_features"]]:
+        """(model_eff, recon_eff): the model's effective feature->feature map and the
+        decomposition's reconstruction of it (Σ components, projected the same way
+        the model projects -- project_in/out fold in w_e for EmbedMLP). The shared
+        basis of residual_frobenius and plot_faithfulness."""
+        model_eff = self.model.effective_matrix()
+        recon_eff = (self.model.project_in(self.reconstructed_weight("w_in"))
+                     @ self.model.project_out(self.reconstructed_weight("w_out"))).detach()
+        return model_eff, recon_eff
+
+    def residual_frobenius(self) -> tuple[float, float]:
+        """Frobenius norm of the effective-map residual: raw ‖W_model - W_recon‖_F and
+        the relative ‖resid‖_F / ‖W_model‖_F (dimensionless, comparable across widths)."""
+        model_eff, recon_eff = self.effective_reconstruction()
+        resid = (model_eff - recon_eff).norm().item()
+        return float(resid), float(resid / (model_eff.norm().item() + 1e-12))
+
+    def behavioural_faithfulness(self, p: float, *, batch: int = 4096,
+                                 seed: int = 0) -> tuple[float, float]:
+        """Output-space faithfulness of the FULL decomposition: forward_dense (every
+        decomposed weight replaced by the Σ-all-components reconstruction) vs the
+        model's own output on a fresh CleanDataset batch at sparsity p. Returns
+        (out_mse, rel_out_err). Distinct from residual_frobenius (weight space)."""
+        ds = CleanDataset(n_features=self.model.n_features, p=float(p),
+                          device=self.model.device, seed=seed)
+        x, _ = ds.generate_batch(batch)
+        with torch.no_grad():
+            target = self.model(x)
+            diff = self.forward_dense(x) - target
+            out_mse = float((diff ** 2).mean().item())
+            rel = float((diff.norm() / (target.norm() + 1e-12)).item())
+        return out_mse, rel
+
 
 # ------------------------
 # APD (Braun et al., 2025)
@@ -453,6 +494,18 @@ class APD(PD):
         return {"attr": attr, "mask": mask, "k": k,
                 "selection_freq": mask.mean(dim=0),
                 "per_example_count": mask.sum(dim=1)}
+
+    def sample_usage_stats(self, p: float, k: int, *, batch: int = 1024,
+                           seed: int = 0) -> dict:
+        """usage_stats on a FRESH CleanDataset batch at sparsity p (target = the
+        frozen model's own output) -- the standard recipe every plot layer used to
+        duplicate inline. APD-family only (SPD has no batch-top-k notion)."""
+        ds = CleanDataset(n_features=self.model.n_features, p=float(p),
+                          device=self.model.device, seed=seed)
+        x, _ = ds.generate_batch(batch)
+        with torch.no_grad():
+            target = self.model(x)
+        return self.usage_stats(x, target, k)
 
     def simplicity_loss(
         self, mask: Float[Tensor, "batch C"], p: float = 1.0, eps: float = 1e-16

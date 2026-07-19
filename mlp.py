@@ -13,6 +13,7 @@ import matplotlib.pyplot as plt
 from matplotlib.cm import ScalarMappable
 from matplotlib.colors import Normalize
 
+from data import CleanDataset
 from pd import PD
 
 
@@ -112,6 +113,41 @@ class MLP(nn.Module, ABC):
         readin()/readout() so it is feature-space for every subclass (EmbedMLP:
         w_e @ w_in @ w_out @ w_e.T rather than the raw d_emb-space w_in @ w_out)."""
         return (self.readin() @ self.readout()).detach()
+
+    def reconstruction_loss(self, p: float, n_exp: float = 4.0, *,
+                            batch: int = 16384, seed: int = 12345) -> float:
+        """L_n reconstruction loss mean(|self(x) - relu(x)|**n_exp) on a fresh
+        held-out CleanDataset batch at sparsity p (the model's own task loss;
+        directly comparable across LinearMLP / EmbedMLP / designed-code models)."""
+        ds = CleanDataset(n_features=self.n_features, p=float(p),
+                          device=self.device, seed=seed)
+        x, y = ds.generate_batch(batch)
+        with torch.no_grad():
+            return float(((self(x) - y).abs() ** n_exp).mean().item())
+
+    def plot_views(self, *, project: bool | None = None) -> dict:
+        """The model's standard feature-space views as {name: Figure}: 'weights'
+        (read-in/read-out), 'effective' (feature->feature map), 'bars' (per-neuron
+        feature assignment). `project` defaults to True for EmbedMLP (fold w_e)."""
+        if project is None:
+            project = isinstance(self, EmbedMLP)
+        figs = {}
+
+        figs["weights"] = self.plot_weights(project=project)
+
+        eff = self.effective_matrix()
+        fig, ax = plt.subplots(constrained_layout=True)
+        v = eff.abs().max().item()
+        im = ax.imshow(eff.cpu().numpy(), cmap="RdBu", vmin=-v, vmax=v)
+        fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+        ax.set_title("effective feature -> feature map")
+        figs["effective"] = fig
+
+        ax_bars = self.plot_weight_bars(show_cbar=True)
+        ax_bars.set_title("feature -> neuron assignment")
+        figs["bars"] = ax_bars.get_figure()
+
+        return figs
 
     def plot_input_output_behaviour(self, ax: plt.Axes | None = None, palette: str = "viridis") -> plt.Figure:
         """Plot the input-output behaviour of the MLP."""

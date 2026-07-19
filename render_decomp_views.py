@@ -26,13 +26,11 @@ import sys
 
 import matplotlib
 matplotlib.use("Agg")
-import numpy as np
-import torch
 
 import decomp_fit
+from pd import APD
 import figutil
 import results_io
-from data import CleanDataset
 
 MODEL = "EmbedMLP"
 DEMB = 200
@@ -67,54 +65,6 @@ def k_for(p: str, C: int) -> int:
     return max(1, min(C - 1, round(float(p) * 100)))
 
 
-def residual_frobenius(pd_obj):
-    """Frobenius norm of the effective feature->feature map residual (same quantity
-    the per-cell 'faithfulness' view renders): raw ‖W_model - W_recon‖_F and the
-    relative ‖resid‖_F / ‖W_model‖_F. W_recon sums ALL components' weights and
-    projects them the same way the model does (project_in/out fold in w_e)."""
-    model_eff = pd_obj.model.effective_matrix().detach().cpu().numpy()
-    w_in_hat = pd_obj.reconstructed_weight("w_in")
-    w_out_hat = pd_obj.reconstructed_weight("w_out")
-    recon_eff = (pd_obj.model.project_in(w_in_hat)
-                 @ pd_obj.model.project_out(w_out_hat)).detach().cpu().numpy()
-    resid = model_eff - recon_eff
-    raw = float(np.linalg.norm(resid))
-    rel = raw / (float(np.linalg.norm(model_eff)) + 1e-12)
-    return raw, rel
-
-
-def behavioural_faithfulness(pd_obj, p: str, device="cpu", batch=4096):
-    """Output-space faithfulness of the FULL decomposition: run the model's forward
-    with every decomposed weight replaced by the sum of ALL C components
-    (pd_obj.forward_dense) and compare to the model's own output on a fresh batch.
-    Returns (out_mse, rel_out_err). Fresh compute (seed=0), not the noisy last
-    training minibatch. Distinct from residual_frobenius (weight-space effective map)."""
-    ds = CleanDataset(n_features=pd_obj.model.n_features, p=float(p),
-                      device=device, seed=0)
-    xb, _ = ds.generate_batch(batch)
-    with torch.no_grad():
-        target = pd_obj.model(xb)
-        pred = pd_obj.forward_dense(xb)
-        diff = (pred - target)
-        out_mse = float((diff ** 2).mean().item())
-        rel = float((diff.norm() / (target.norm() + 1e-12)).item())
-    return out_mse, rel
-
-
-def build_usage(pd_obj, p: str, k: int, device="cpu"):
-    """Batch-top-k behavioural usage on a fresh batch (same recipe as
-    plot_components). Only APD/OracleAPD/ExactPD expose usage_stats; SPD (stochastic
-    gating, no k) has none, so return None and let the usage panel be omitted."""
-    if not hasattr(pd_obj, "usage_stats"):
-        return None
-    ds = CleanDataset(n_features=pd_obj.model.n_features, p=float(p),
-                      device=device, seed=0)
-    xb, _ = ds.generate_batch(1024)
-    with torch.no_grad():
-        tb = pd_obj.model(xb)
-    return pd_obj.usage_stats(xb, tb, k)
-
-
 def render_per_cell():
     """Delegate each (d_mlp, p) cell to plot_components.py -- the existing per-cell
     render path (no new plotting logic), now collision-free thanks to d_mlp in the
@@ -144,7 +94,8 @@ def render_cross_p(device="cpu"):
             pd_obj = decomp_fit.load_decomposition(run_id, device=device)
             k = k_for(p, pd_obj.C)
             entries.append({"p": p, "k": k, "pd_obj": pd_obj,
-                            "usage": build_usage(pd_obj, p, k, device)})
+                            "usage": (pd_obj.sample_usage_stats(float(p), k)
+                                      if isinstance(pd_obj, APD) else None)})
         params = {"model": MODEL, "d_emb": demb_arg(), "d_mlp": d_mlp,
                   "n_exp": N_EXP, "method": METHOD, "C": entries[0]["pd_obj"].C}
         fig = figutil.plot_components_vs_p(entries, params=params)
@@ -167,7 +118,7 @@ def render_faithfulness_vs_p(device="cpu"):
             run_id = results_io.make_run_id(model=MODEL, d_emb=demb_arg(), d_mlp=d_mlp,
                                             p=p, n_exp=N_EXP, method=METHOD)
             pd_obj = decomp_fit.load_decomposition(run_id, device=device)
-            raw, rel = residual_frobenius(pd_obj)
+            raw, rel = pd_obj.residual_frobenius()
             pts.append((float(p), raw, rel))
         series[d_mlp] = pts
     params = {"model": MODEL, "d_emb": demb_arg(), "n_exp": N_EXP, "method": METHOD}
@@ -191,7 +142,7 @@ def render_behavioural_faithfulness_vs_p(device="cpu"):
             run_id = results_io.make_run_id(model=MODEL, d_emb=demb_arg(), d_mlp=d_mlp,
                                             p=p, n_exp=N_EXP, method=METHOD)
             pd_obj = decomp_fit.load_decomposition(run_id, device=device)
-            mse, rel = behavioural_faithfulness(pd_obj, p, device)
+            mse, rel = pd_obj.behavioural_faithfulness(float(p))
             pts.append((float(p), mse, rel))
         series[d_mlp] = pts
     params = {"model": MODEL, "d_emb": demb_arg(), "n_exp": N_EXP, "method": METHOD}
