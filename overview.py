@@ -574,6 +574,70 @@ def vpd_comparison(n_exp, behav, device="cpu"):
     print(f"  saved {out}")
 
 
+def vpd_behavioural_nsoft(n_exp, behav, device="cpu"):
+    """VPD's OWN behavioural n_soft: run the VPD component reconstruction
+    (forward_dense = Σ all components, NO delta) as a model and count features it
+    computes, n_soft = Σ max(0, R²_i) via PD.per_feature_r2. Top row = VPD
+    component-only n_soft per width; bottom row = VPD n_soft − model n_soft (`behav`),
+    whose shortfall is behavioural capacity carried by the delta spillover. Same
+    2×2 layout as behavioural_ceiling_heatmap."""
+    import glob as _glob
+    ntok = results_io._fmt_n(n_exp)
+    pat = os.path.join(os.path.dirname(__file__), "results", f"n{ntok}", "decomps", "*_VPD.pt")
+    vpd_ns = {}
+    for path in sorted(_glob.glob(pat)):
+        run_id = os.path.basename(path)[:-3]
+        info = results_io.parse_run_id(run_id)
+        pd_obj = decomp_fit.load_decomposition(run_id, device=device)
+        label = "LinearMLP" if info["d_emb"] is None else str(info["d_emb"])
+        r2 = pd_obj.per_feature_r2(float(info["p"]))
+        vpd_ns[(label, info["d_mlp"], float(info["p"]))] = float(r2.clamp(min=0).sum())
+    if not vpd_ns:
+        print("  [skip vpd_nsoft] no VPD decomps found")
+        return
+    os.makedirs(OVERVIEW_FIG, exist_ok=True)
+    d_mlps = sorted({d for (_, d, _) in vpd_ns})
+    row_order = [r for r in ["LinearMLP", "20", "50", "100", "200", "1000"]
+                 if any(lbl == r for (lbl, _, _) in vpd_ns)]
+    fig, axes = plt.subplots(2, len(d_mlps), figsize=(5.5 * len(d_mlps), 9.0),
+                             squeeze=False, constrained_layout=True)
+    for col, d_mlp in enumerate(d_mlps):
+        VPD = np.full((len(row_order), len(PS)), np.nan)
+        DIFF = np.full_like(VPD, np.nan)
+        for i, lbl in enumerate(row_order):
+            for j, p in enumerate(PS):
+                v = vpd_ns.get((lbl, d_mlp, float(p)))
+                if v is None:
+                    continue
+                VPD[i, j] = v
+                m = behav.get((lbl, d_mlp, float(p)))
+                if m is not None:
+                    DIFF[i, j] = v - m
+        for row, (A, cmap, vmin, vmax, ttl) in enumerate([
+                (VPD, "viridis", 0, N_FEATURES, f"VPD component-only n_soft  d_mlp={d_mlp}"),
+                (DIFF, "coolwarm", -60, 60, f"VPD − model n_soft  d_mlp={d_mlp}")]):
+            ax = axes[row][col]
+            im = ax.imshow(A, aspect="auto", cmap=cmap, vmin=vmin, vmax=vmax)
+            ax.set_xticks(range(len(PS)), PS)
+            ax.set_yticks(range(len(row_order)), row_order)
+            ax.set_xlabel("data sparsity p")
+            ax.set_title(ttl, fontsize=10)
+            for i in range(A.shape[0]):
+                for j in range(A.shape[1]):
+                    if np.isfinite(A[i, j]):
+                        dark = (cmap == "viridis" and A[i, j] < 0.6 * N_FEATURES)
+                        ax.text(j, i, f"{A[i, j]:.0f}", ha="center", va="center",
+                                color="w" if dark else "k", fontsize=8)
+            fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+        axes[0][col].set_ylabel("model (d_emb; LinearMLP = no embedding)")
+    fig.suptitle(f"VPD's behavioural feature count (component reconstruction, delta excluded) — "
+                 f"top: n_soft = Σ max(0, R²);  bottom: shortfall vs model = delta-carried "
+                 f"capacity — n={ntok}", fontsize=11)
+    out = os.path.join(OVERVIEW_FIG, f"vpd_behavioural_nsoft_n{ntok}.png")
+    fig.savefig(out, dpi=140, bbox_inches="tight"); plt.close(fig)
+    print(f"  saved {out}")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -598,6 +662,7 @@ def main():
                             include_biregular=not a.no_biregular)
     if a.vpd:
         vpd_comparison(a.n_exp, behav, device=a.device)
+        vpd_behavioural_nsoft(a.n_exp, behav, device=a.device)
     write_loss_tables(a.n_exp, device=a.device)        # reuses cached K5 fits
 
 

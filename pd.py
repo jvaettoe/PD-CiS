@@ -377,6 +377,37 @@ class PD(PDViz, nn.Module, ABC):
             rel = float((diff.norm() / (target.norm() + 1e-12)).item())
         return out_mse, rel
 
+    def per_feature_r2(self, p: float, *, batch: int = 8192, n_batches: int = 25,
+                       seed: int = 9999, isolated: bool = False) -> Float[Tensor, "n_features"]:
+        """BEHAVIOURAL per-feature computation quality of the DECOMPOSITION's own
+        forward -- the exact analog of MLP.per_feature_r2, but the prediction is
+        self.forward_dense(x) (every decomposed weight replaced by its
+        Σ-all-components reconstruction) instead of model(x). For VPD, whose
+        reconstruction EXCLUDES the delta component (masked_weight(name, None) = V@U),
+        this measures how many features VPD's components ALONE compute; the shortfall
+        vs model.per_feature_r2 is capacity carried by the delta spillover. For an
+        exact decomposition (ExactPD, faithfulness == 0) this equals the model's own
+        per_feature_r2 to numerical precision.
+
+        Same R^2 convention as MLP.per_feature_r2: active-conditional MSE over
+        n_batches fresh batches at sparsity p (isolated=True -> exactly one active
+        feature), normalised against the always-predict-0 baseline E[x_i^2 | x_i>0] =
+        1/3, so R2_i = 1 - MSE_i/(1/3). Callers derive n_soft = Σ max(0, R2_i)."""
+        ds = CleanDataset(n_features=self.model.n_features, p=float(p),
+                          device=self.model.device, seed=seed,
+                          exactly_one_active_feature=isolated)
+        err_sum = torch.zeros(self.model.n_features, device=self.model.device)
+        cnt = torch.zeros(self.model.n_features, device=self.model.device)
+        with torch.no_grad():
+            for _ in range(n_batches):
+                x, y = ds.generate_batch(batch)
+                yhat = self.forward_dense(x)
+                active = (x > 0).float()
+                err_sum += ((yhat - y) ** 2 * active).sum(dim=0)
+                cnt += active.sum(dim=0)
+        mse = err_sum / cnt.clamp_min(1)
+        return (1.0 - mse / (1.0 / 3.0)).detach()
+
 
 # ------------------------
 # APD (Braun et al., 2025)
