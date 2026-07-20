@@ -28,7 +28,8 @@ METHODS = ("APD", "OracleAPD", "SPD", "ExactPD", "VPD")
 # handcoded ground truth -- its components are set analytically and frozen, so it
 # has no trainable params and needs a single eval pass to log its loss terms.
 METHOD_STEPS = {"APD": 3000, "OracleAPD": 500, "SPD": 5000, "ExactPD": 1,
-                "VPD": 4000}  # VPD: toy config uses 25k; 4k fits the CPU budget (tunable)
+                "VPD": 25_000}  # VPD: Goodfire resid_mlp2 reference (GPU-scale;
+                                # on CPU pass --steps-scale 0.16 for the old 4k budget)
 DEFAULT_LR = 1e-3
 DEFAULT_BATCH = 2048
 ORACLE_BATCH = 1024
