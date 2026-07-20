@@ -39,7 +39,7 @@ D_EMBS = [1000, 200, 100, 50, 20]
 SMOKE_N_EXPS = [2]
 SMOKE_PS = ["0.1"]
 SMOKE_D_EMBS = [20, 100]
-SMOKE_STEPS = {"APD": 30, "OracleAPD": 15, "SPD": 30, "ExactPD": 1}
+SMOKE_STEPS = {"APD": 30, "OracleAPD": 15, "SPD": 30, "ExactPD": 1, "VPD": 30}
 SMOKE_BASE_STEPS = 200
 
 

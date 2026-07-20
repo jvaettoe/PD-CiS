@@ -185,7 +185,7 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--method", default=METHOD,
-                    choices=["APD", "OracleAPD", "SPD", "ExactPD"],
+                    choices=["APD", "OracleAPD", "SPD", "ExactPD", "VPD"],
                     help="which fitted decomposition to visualise (default APD)")
     ap.add_argument("--model", default=MODEL, choices=["EmbedMLP", "LinearMLP"],
                     help="model class (default EmbedMLP; LinearMLP has no d_emb)")

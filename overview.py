@@ -24,6 +24,7 @@ import numpy as np
 import pandas as pd
 
 import cc
+import decomp_fit
 import results_io
 import biregular_ansatz as bir
 from mlp import LinearMLP, EmbedMLP
@@ -477,12 +478,110 @@ def biregular_overview(n_exp, device="cpu"):
     print(f"  saved {out}")
 
 
+
+
+# --------------------------------------------------------------------------
+# (e) VPD comparison: Goodfire adversarial PD vs ExactPD vs behavioural count
+# --------------------------------------------------------------------------
+
+def _vpd_counts(n_exp, device="cpu"):
+    """{(demb_label, d_mlp, p_float): ci_stats headline} for every saved VPD decomp
+    (post-hoc: reload + evaluate the learned CI on a fresh batch at that cell's p)."""
+    import glob as _glob
+    out = {}
+    pat = os.path.join(os.path.dirname(__file__), "results",
+                       f"n{results_io._fmt_n(n_exp)}", "decomps", "*_VPD.pt")
+    for path in sorted(_glob.glob(pat)):
+        run_id = os.path.basename(path)[:-3]
+        info = results_io.parse_run_id(run_id)
+        pd_obj = decomp_fit.load_decomposition(run_id, device=device)
+        label = "LinearMLP" if info["d_emb"] is None else str(info["d_emb"])
+        out[(label, info["d_mlp"], float(info["p"]))] = pd_obj.ci_stats(float(info["p"]))["headline"]
+    return out
+
+
+def vpd_comparison(n_exp, behav, device="cpu"):
+    """VPD count heatmap (same style as the other count heatmaps) + the central-
+    question scatters: does VPD's model-level component count (n_alive_union; PR of
+    mean-CI annotated) track the behavioural n_soft, ExactPD's effective_count, or
+    neither."""
+    vpd = _vpd_counts(n_exp, device=device)
+    if not vpd:
+        print("  [skip vpd] no VPD decomps found")
+        return
+    ntok = results_io._fmt_n(n_exp)
+    os.makedirs(OVERVIEW_FIG, exist_ok=True)
+    d_mlps = sorted({d for (_, d, _) in vpd})
+    row_order = [r for r in ["LinearMLP", "20", "50", "100", "200", "1000"]
+                 if any(lbl == r for (lbl, _, _) in vpd)]
+
+    # heatmap: n_alive_union (big) with PR(mean-ci) small
+    fig, axes = plt.subplots(1, len(d_mlps), figsize=(6.0 * len(d_mlps), 4.8),
+                             squeeze=False, constrained_layout=True)
+    for ax, d_mlp in zip(axes[0], d_mlps):
+        A = np.full((len(row_order), len(PS)), np.nan)
+        PR = np.full_like(A, np.nan)
+        for i, lbl in enumerate(row_order):
+            for j, p in enumerate(PS):
+                st = vpd.get((lbl, d_mlp, float(p)))
+                if st:
+                    A[i, j] = st["n_alive_union"]
+                    PR[i, j] = st["pr_mean_ci"]
+        im = ax.imshow(A, aspect="auto", cmap="viridis", vmin=0, vmax=N_FEATURES)
+        ax.set_xticks(range(len(PS)), PS)
+        ax.set_yticks(range(len(row_order)), row_order)
+        ax.set_xlabel("data sparsity p"); ax.set_title(f"d_mlp={d_mlp}")
+        for i in range(A.shape[0]):
+            for j in range(A.shape[1]):
+                if np.isfinite(A[i, j]):
+                    ax.text(j, i, f"{A[i, j]:.0f}\n({PR[i, j]:.0f})", ha="center",
+                            va="center", fontsize=7,
+                            color="w" if A[i, j] < 0.6 * N_FEATURES else "k")
+        fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+    axes[0][0].set_ylabel("model (d_emb; LinearMLP = no embedding)")
+    fig.suptitle(f"VPD component count — n_alive_union (PR of mean-CI)  "
+                 f"[ci > {0.1} on a fresh batch at the cell's p; of {N_FEATURES}] — n={ntok}",
+                 fontsize=11)
+    out = os.path.join(OVERVIEW_FIG, f"vpd_count_n{ntok}.png")
+    fig.savefig(out, dpi=140, bbox_inches="tight"); plt.close(fig)
+    print(f"  saved {out}")
+
+    # central-question scatters
+    exact = _exactpd_counts(n_exp)
+    fig, axes = plt.subplots(1, 2, figsize=(12.4, 6.0), constrained_layout=True, sharey=True)
+    for ax, (ref, ttl, xlabel) in zip(axes, [
+            (behav, "VPD vs BEHAVIOURAL count", "behavioural n_soft"),
+            (exact, "VPD vs ExactPD effective_count", "ExactPD effective_count")]):
+        for (lbl, d_mlp, pf), st in vpd.items():
+            x = ref.get((lbl, d_mlp, pf))
+            if x is None:
+                continue
+            marker = "s" if lbl == "LinearMLP" else "o"
+            ax.scatter([x], [st["n_alive_union"]], marker=marker, s=45, alpha=0.85,
+                       color="tab:green")
+            ax.scatter([x], [st["pr_mean_ci"]], marker=marker, s=30, alpha=0.5,
+                       color="tab:purple")
+        lim = [0, N_FEATURES * 1.05]
+        ax.plot(lim, lim, "k--", lw=1, alpha=0.6)
+        ax.set_xlim(lim); ax.set_ylim(lim)
+        ax.set_xlabel(xlabel); ax.set_title(ttl, fontsize=10)
+        ax.grid(True, alpha=0.3)
+    axes[0].set_ylabel("VPD count  (green = n_alive_union, purple = PR(mean CI))")
+    fig.suptitle(f"Does VPD recover either feature count?  (d_mlp=50 cells, n={ntok})",
+                 fontsize=12)
+    out = os.path.join(OVERVIEW_FIG, f"vpd_agreement_n{ntok}.png")
+    fig.savefig(out, dpi=140, bbox_inches="tight"); plt.close(fig)
+    print(f"  saved {out}")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--n", type=float, default=4.0, dest="n_exp")
     ap.add_argument("--no-biregular", action="store_true", dest="no_biregular",
                     help="skip the biregular K x variant grid (the slow part)")
+    ap.add_argument("--vpd", action="store_true",
+                    help="render the VPD comparison figures (needs VPD decomps)")
     ap.add_argument("--calibration", action="store_true",
                     help="also run the evaluation-density calibration curves (targeted diagnostic)")
     ap.add_argument("--device", default="cpu")
@@ -497,6 +596,8 @@ def main():
         biregular_overview(a.n_exp, device=a.device)   # fills the fit cache (incl. n_soft)
     count_agreement_scatter(a.n_exp, behav, device=a.device,
                             include_biregular=not a.no_biregular)
+    if a.vpd:
+        vpd_comparison(a.n_exp, behav, device=a.device)
     write_loss_tables(a.n_exp, device=a.device)        # reuses cached K5 fits
 
 

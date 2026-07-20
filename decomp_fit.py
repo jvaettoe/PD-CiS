@@ -18,15 +18,17 @@ from cc import set_seed
 from data import SparseDataset
 from mlp import MLP
 from pd import PD, APD, OracleAPD, SPD, ExactPD
+from vpd import VPD
 
-METHODS = ("APD", "OracleAPD", "SPD", "ExactPD")
+METHODS = ("APD", "OracleAPD", "SPD", "ExactPD", "VPD")
 
 # Per-method step budgets. OracleAPD recomputes importance with C leave-one-out
 # forwards per step, so it gets far fewer steps than the gradient-attribution
 # methods. SPD's masks are stochastic and need longer to converge. ExactPD is the
 # handcoded ground truth -- its components are set analytically and frozen, so it
 # has no trainable params and needs a single eval pass to log its loss terms.
-METHOD_STEPS = {"APD": 3000, "OracleAPD": 500, "SPD": 5000, "ExactPD": 1}
+METHOD_STEPS = {"APD": 3000, "OracleAPD": 500, "SPD": 5000, "ExactPD": 1,
+                "VPD": 4000}  # VPD: toy config uses 25k; 4k fits the CPU budget (tunable)
 DEFAULT_LR = 1e-3
 DEFAULT_BATCH = 2048
 ORACLE_BATCH = 1024
@@ -71,6 +73,8 @@ def build_pd(method: str, model: MLP, C: int, rank: int = APD_RANK) -> PD:
     if method == "ExactPD":
         # C is ignored: ExactPD forces C = n_features (one component per feature).
         return ExactPD(model)
+    if method == "VPD":
+        return VPD(model, C)
     raise ValueError(f"Unknown method '{method}' (expected one of {METHODS})")
 
 
@@ -85,6 +89,10 @@ def loss_kwargs_for(method: str, k: int, lp: float = 1.0,
     if method in ("APD", "OracleAPD", "ExactPD"):
         return {"alpha_faithfulness": 1.0, "k": k,
                 "alpha_minimality": 1.0, "alpha_simplicity": alpha_simplicity, "p": lp}
+    if method == "VPD":
+        # Goodfire resid_mlp2 toy recipe; faithfulness coeff 0 (delta component + warmup).
+        return {"alpha_faithfulness": 0.0, "alpha_importance": 1e-4,
+                "alpha_stoch": 2.0, "alpha_pgd": 2.0, "pnorm": 2.0}
     if method == "SPD":
         return {"alpha_faithfulness": 1.0, "alpha_recon": 1.0,
                 "alpha_recon_layerwise": 1.0, "alpha_importance": 1e-5,

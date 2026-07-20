@@ -33,7 +33,7 @@ def main():
                     help="hidden width (first-class in the run_id)")
     ap.add_argument("--p", default="0.1")
     ap.add_argument("--n", type=float, default=2.0, dest="n_exp")
-    ap.add_argument("--method", default="APD", choices=["APD", "OracleAPD", "SPD", "ExactPD"])
+    ap.add_argument("--method", default="APD", choices=["APD", "OracleAPD", "SPD", "ExactPD", "VPD"])
     ap.add_argument("--top", type=int, default=16)
     ap.add_argument("--device", default="cpu")
     a = ap.parse_args()
