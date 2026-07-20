@@ -68,8 +68,10 @@ class CodeAnsatz:
     the MLP hierarchy (a factory + bookkeeping), not inside it."""
 
     def __init__(self, K: int, *, family: str = "regular", seed: int = 0, swaps: int = 0,
-                 n_features: int = F, n_neurons: int = N):
+                 decoder: str = "pinv", n_features: int = F, n_neurons: int = N):
+        assert decoder in ("pinv", "transpose"), decoder
         self.K, self.family, self.seed, self.swaps = K, family, seed, swaps
+        self.decoder = decoder       # "pinv": w_out = c*pinv(M.T).T ; "transpose": w_out = c*w_in.T
         self.F, self.N = n_features, n_neurons
         code_fn = codes.regular_code if family == "regular" else codes.random_code
         M = code_fn(n_features, n_neurons, K, seed)
@@ -87,7 +89,8 @@ class CodeAnsatz:
         """Filename base token; stamps every identifying param (kept byte-identical
         to the historic format so re-renders overwrite rather than duplicate)."""
         swap_tok = f"_swap{self.swaps}" if self.swaps > 0 else ""
-        return f"biregular_{self.family}{swap_tok}_K{self.K}_seed{self.seed}"
+        dec_tok = "" if self.decoder == "pinv" else f"_{self.decoder}"
+        return f"biregular_{self.family}{swap_tok}{dec_tok}_K{self.K}_seed{self.seed}"
 
     @staticmethod
     def _sq_overlap(M) -> tuple[int, int]:
@@ -110,7 +113,10 @@ class CodeAnsatz:
         a, b, c = abc
         Mf = self.M.astype(np.float64)
         w_in = (a * Mf + b * (1.0 - Mf)).astype(np.float32)      # (F, N)
-        w_out = (c * self.pinv_wout()).astype(np.float32)         # (N, F)
+        if self.decoder == "transpose":
+            w_out = (c * w_in.T).astype(np.float32)               # (N, F) tied: decoder = c*encoder^T
+        else:
+            w_out = (c * self.pinv_wout()).astype(np.float32)     # (N, F) scaled pseudoinverse
         model = LinearMLP(n_features=self.F, d_mlp=self.N, device=device)
         with torch.no_grad():
             model.w_in.copy_(torch.from_numpy(w_in).to(device))
@@ -148,7 +154,9 @@ class CodeAnsatz:
             idx = torch.randint(0, pool, (batch,), device=device, generator=gen)
             x, y = x_pool[idx], y_pool[idx]
             w_in = a * Mf + b * (1 - Mf)
-            loss = ((torch.relu(x @ w_in) @ (c * PINV) - y).abs() ** 4).mean()
+            # transpose decoder is TIED to the (a,b)-dependent encoder; pinv base is fixed
+            w_out = c * w_in.T if self.decoder == "transpose" else c * PINV
+            loss = ((torch.relu(x @ w_in) @ w_out - y).abs() ** 4).mean()
             opt.zero_grad()
             loss.backward()
             opt.step()
