@@ -270,8 +270,10 @@ class PDViz:
         d_mlp = reads_h.shape[1]
         ncol = min(4, len(top_idx)) or 1
         nrow = math.ceil(len(top_idx) / ncol)
+        # sharey: all panels are top-by-effective-norm, so a common weight scale is
+        # meaningful and lets read-in/write-out magnitudes be compared across components.
         fig, axes = plt.subplots(nrow, ncol, figsize=(3.3 * ncol, 2.1 * nrow + 0.6),
-                                 constrained_layout=True, squeeze=False)
+                                 constrained_layout=True, squeeze=False, sharey=True)
         xh = np.arange(d_mlp)
         for i, c in enumerate(top_idx):
             ax = axes[i // ncol][i % ncol]
@@ -282,11 +284,13 @@ class PDViz:
             peak = int(np.abs(r).argmax())
             ax.set_title(f"c{c}: peak neuron {peak}   ‖e‖={eff_norm[c]:.2g}", fontsize=8)
             ax.set_xticks([])
-            ax.set_yticks([])
+            # y-axis: tick labels on the left column only (shared scale), keep others clean
+            ax.tick_params(axis="y", labelsize=6, labelleft=(i % ncol == 0))
         for j in range(len(top_idx), nrow * ncol):
             axes[j // ncol][j % ncol].axis("off")
         if top_idx:
             axes[0][0].legend(fontsize=6, loc="upper right")
+        fig.supylabel("weight value", fontsize=9)
         fig.suptitle(component_title(
             "Read-in (blue) / write-out (red) weights over hidden neurons", params,
             f"top {len(top_idx)} by effective norm; x = hidden neuron (0..{d_mlp-1})"),
