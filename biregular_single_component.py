@@ -52,10 +52,21 @@ def _swap_tok(swaps: int) -> str:
 
 
 def analyse(K: int, swaps: int, p: str, device="cpu", decoder: str = "pinv") -> dict:
-    """Build the biregular LinearMLP, run ExactPD, return the full one-hot response
-    matrix R and derived per-feature / global interference metrics."""
+    """Biregular wrapper: build the biregular LinearMLP for (K, swaps, decoder) at p, then
+    run the model-agnostic single-component analysis. Adds the biregular `sq_overlap`."""
     ans = _code(K, swaps, decoder)
     model = ans.model(ans.fit_abc(float(p), device=device), device=device)
+    d = _analyse_model(model, p, device=device)
+    d["sq_overlap"] = ans.sq_overlap()
+    return d
+
+
+def _analyse_model(model, p: str, device="cpu") -> dict:
+    """Model-agnostic core: run ExactPD on any LinearMLP/MLP, return the full one-hot
+    response matrix R, the single-component matrix S (explicit forward_masked), and derived
+    per-feature / global interference + per-probe loss metrics. Works for the biregular codes
+    and the trained LinearMLP alike (ExactPD component c writes only to output c → single =
+    on-target only)."""
     pd_e = ExactPD(model)
     F = model.n_features
     X = torch.eye(F, device=device)                 # probe c = one-hot e_c (row c)
@@ -97,22 +108,27 @@ def analyse(K: int, swaps: int, p: str, device="cpu", decoder: str = "pinv") -> 
             "l4_full": float(l4_full.mean()), "l4_single": float(l4_single.mean()),
             # worst case: max over probes (independent per series)
             "l2_full_max": float(l2_full.max()), "l2_single_max": float(l2_single.max()),
-            "l4_full_max": float(l4_full.max()), "l4_single_max": float(l4_single.max()),
-            "sq_overlap": ans.sq_overlap()}
+            "l4_full_max": float(l4_full.max()), "l4_single_max": float(l4_single.max())}
 
 
 def plot_loss_bars(res: dict[str, dict], K: int, p: str, tag: str = "",
-                   stat: str = "mean") -> None:
+                   stat: str = "mean", stem: str | None = None,
+                   ctx: str | None = None) -> None:
     """Forward-pass loss, single ExactPD component vs full model, per variant, in two
     panels (MSE and the training L4). stat="mean" averages over the 100 one-hot probes;
     stat="max" takes the worst probe per series (worst single component vs the full
-    model's worst probe -- independent maxes)."""
+    model's worst probe -- independent maxes). `stem` overrides the output filename stem
+    (no extension), `ctx` the title context; both default to the biregular naming."""
     os.makedirs(OVERVIEW_FIG, exist_ok=True)
     sfx = "" if stat == "mean" else "_max"
     agg = "average" if stat == "mean" else "worst-case (max over 100 one-hot probes)"
     reduce_word = "averaged over" if stat == "mean" else "max over"
-    stem = "biregular_avg_loss" if stat == "mean" else "biregular_max_loss"
-    names = [n for n, _ in VARIANTS]
+    if stem is None:
+        base = "biregular_avg_loss" if stat == "mean" else "biregular_max_loss"
+        stem = f"{base}_K{K}_p{p}{tag}"
+    if ctx is None:
+        ctx = f"K={K}, p={p}{tag and ', ' + tag}"
+    names = list(res)
     x = np.arange(len(names)); w = 0.36
     fig, axes = plt.subplots(1, 2, figsize=(11, 4.4), constrained_layout=True)
     for ax, (key_s, key_f, ttl) in zip(axes, [
@@ -127,16 +143,21 @@ def plot_loss_bars(res: dict[str, dict], K: int, p: str, tag: str = "",
         ax.set_ylabel(f"loss ({reduce_word} 100 one-hot probes)")
         ax.legend(fontsize=9)
     fig.suptitle(f"Single ExactPD component vs full model — {agg} forward-pass loss on "
-                 f"one-hot inputs e_c  (K={K}, p={p}{tag and ', ' + tag})", fontsize=11)
-    out = os.path.join(OVERVIEW_FIG, f"{stem}_K{K}_p{p}{tag}.png")
+                 f"one-hot inputs e_c  ({ctx})", fontsize=11)
+    out = os.path.join(OVERVIEW_FIG, f"{stem}.png")
     fig.savefig(out, dpi=140, bbox_inches="tight"); plt.close(fig); print(f"  saved {out}")
 
 
-def plot_io_response(res: dict[str, dict], K: int, p: str, tag: str = "") -> None:
+def plot_io_response(res: dict[str, dict], K: int, p: str, tag: str = "",
+                     stem: str | None = None, ctx: str | None = None) -> None:
     """I/O response: the same one-hot e_c through its single component vs the full
     model, for a few example features. Single = clean spike at c; full = spike + leakage."""
     os.makedirs(OVERVIEW_FIG, exist_ok=True)
-    names = [n for n, _ in VARIANTS]
+    if stem is None:
+        stem = f"biregular_io_response_K{K}_p{p}{tag}"
+    if ctx is None:
+        ctx = f"K={K}, p={p}{tag and ', ' + tag}"
+    names = list(res)
     F = res[names[0]]["F"]
     examples = [0, F // 3, 2 * F // 3]
     fig, axes = plt.subplots(len(examples), len(names),
@@ -160,96 +181,111 @@ def plot_io_response(res: dict[str, dict], K: int, p: str, tag: str = "") -> Non
                 ax.legend(fontsize=7, loc="upper right")
     fig.suptitle(f"I/O response — one-hot e_c through its component vs the full model  "
                  f"(single = self-response at c only; full = self + leakage)  "
-                 f"(K={K}, p={p}{tag and ', ' + tag})", fontsize=11)
-    out = os.path.join(OVERVIEW_FIG, f"biregular_io_response_K{K}_p{p}{tag}.png")
+                 f"({ctx})", fontsize=11)
+    out = os.path.join(OVERVIEW_FIG, f"{stem}.png")
     fig.savefig(out, dpi=140, bbox_inches="tight"); plt.close(fig); print(f"  saved {out}")
 
 
-def write_ratios(res: dict[str, dict], K: int, p: str, tag: str, decoder: str) -> None:
+def write_ratios(res: dict[str, dict], K: int, p: str, tag: str, decoder: str,
+                 stem: str | None = None, ctx: str | None = None) -> None:
     """Print + save the single-component / full-model loss ratio (full model = benchmark
     denominator), per variant, for both mean and worst-case (max) aggregation."""
     os.makedirs(OVERVIEW_RES, exist_ok=True)
+    if stem is None:
+        stem = f"biregular_single_vs_full_K{K}_p{p}{tag}"
+    if ctx is None:
+        ctx = f"Biregular K{K} p={p} ({decoder})"
     cols = ["variant", "stat", "MSE single", "MSE full", "MSE single/full",
             "L4 single", "L4 full", "L4 single/full"]
     rows = []
-    for name in [n for n, _ in VARIANTS]:
+    for name in list(res):
         d = res[name]
         for stat, sfx in (("mean", ""), ("max", "_max")):
             l2s, l2f = d["l2_single" + sfx], d["l2_full" + sfx]
             l4s, l4f = d["l4_single" + sfx], d["l4_full" + sfx]
             rows.append([name, stat, f"{l2s:.3e}", f"{l2f:.3e}", f"{l2s/l2f:.3f}",
                          f"{l4s:.3e}", f"{l4f:.3e}", f"{l4s/l4f:.3f}"])
-    md = [f"### Biregular K{K} p={p} ({decoder}): single-component / full-model "
+    md = [f"### {ctx}: single-component / full-model "
           f"forward-pass loss ratio (full model = benchmark)", "",
           "| " + " | ".join(cols) + " |", "|" + "|".join(["---"] * len(cols)) + "|"]
     md += ["| " + " | ".join(r) + " |" for r in rows]
-    stem = os.path.join(OVERVIEW_RES, f"biregular_single_vs_full_K{K}_p{p}{tag}")
-    with open(stem + ".md", "w") as f:
+    path = os.path.join(OVERVIEW_RES, stem)
+    with open(path + ".md", "w") as f:
         f.write("\n".join(md) + "\n")
-    with open(stem + ".csv", "w") as f:
+    with open(path + ".csv", "w") as f:
         f.write(",".join(cols) + "\n")
         f.writelines(",".join(r) + "\n" for r in rows)
-    print("\n" + "\n".join(md) + f"\n  (saved {stem}.md / .csv)")
+    print("\n" + "\n".join(md) + f"\n  (saved {path}.md / .csv)")
 
 
-def plot_single_vs_full_overview(K: int, device="cpu", swaps: int = 0) -> None:
+def plot_single_vs_full_overview(K: int, device="cpu", swaps: int = 0,
+                                 providers=None, tag=None, stem: str | None = None,
+                                 ctx: str | None = None) -> None:
     """Overview across the whole p range: single-component vs full-model forward-pass loss
-    (and their ratio) for pinv & transpose decoders. Collects the single-vs-full
-    findings in one figure + table."""
+    (and their ratio). Series = biregular pinv/transpose by default, or the passed
+    `providers` = [(label, analysis_fn(p, device) -> dict), ...]."""
     os.makedirs(OVERVIEW_FIG, exist_ok=True); os.makedirs(OVERVIEW_RES, exist_ok=True)
-    decoders = ["pinv", "transpose"]
-    data = {dec: {k: [] for k in ("l2_single", "l2_full", "l4_single", "l4_full")}
-            for dec in decoders}
-    for dec in decoders:
+    tok = _swap_tok(swaps) if tag is None else tag
+    if stem is None:
+        stem = f"biregular_single_vs_full_overview_K{K}{tok}"
+    if ctx is None:
+        descr = tag.lstrip("_") if tag else ("overlap-min" if swaps else "no-swap")
+        ctx = f"K={K}, {descr}"
+    if providers is None:
+        providers = [(dec, (lambda p, d, dec=dec: analyse(K, swaps, p, device=d, decoder=dec)))
+                     for dec in ("pinv", "transpose")]
+    labels = [lab for lab, _ in providers]
+    palette = ["tab:blue", "tab:red", "tab:green", "tab:purple"]
+    colr = {lab: palette[i % len(palette)] for i, lab in enumerate(labels)}
+    data = {lab: {k: [] for k in ("l2_single", "l2_full", "l4_single", "l4_full")}
+            for lab in labels}
+    for lab, fn in providers:
         for p in PS:
-            r = analyse(K, swaps, p, device=device, decoder=dec)
-            for k in data[dec]:
-                data[dec][k].append(r[k])
-            print(f"[overview {dec:9} p={p:6}] MSE single={r['l2_single']:.3e} "
+            r = fn(p, device)
+            for k in data[lab]:
+                data[lab][k].append(r[k])
+            print(f"[overview {lab:14} p={p:6}] MSE single={r['l2_single']:.3e} "
                   f"full={r['l2_full']:.3e} ratio={r['l2_single']/r['l2_full']:.3f}")
     xs = [float(p) for p in PS]
-    col = {"pinv": "tab:blue", "transpose": "tab:red"}
     fig, axes = plt.subplots(1, 3, figsize=(16, 4.6), constrained_layout=True)
     for ax, key_s, key_f, ttl in [(axes[0], "l2_single", "l2_full", "forward-pass MSE"),
                                    (axes[1], "l4_single", "l4_full", "forward-pass L4")]:
-        for dec in decoders:
-            ax.plot(xs, data[dec][key_f], "o-", color=col[dec], label=f"{dec} full model")
-            ax.plot(xs, data[dec][key_s], "o--", color=col[dec], alpha=0.7,
-                    label=f"{dec} single component")
+        for lab in labels:
+            ax.plot(xs, data[lab][key_f], "o-", color=colr[lab], label=f"{lab} full model")
+            ax.plot(xs, data[lab][key_s], "o--", color=colr[lab], alpha=0.7,
+                    label=f"{lab} single component")
         ax.set_xscale("log"); ax.set_yscale("log")
         ax.set_xlabel("data sparsity p"); ax.set_ylabel("loss (mean over 100 one-hot probes)")
         ax.set_title(ttl, fontsize=10); ax.grid(True, alpha=0.3, which="both"); ax.legend(fontsize=7)
-    for dec in decoders:
-        r2 = [s / f for s, f in zip(data[dec]["l2_single"], data[dec]["l2_full"])]
-        r4 = [s / f for s, f in zip(data[dec]["l4_single"], data[dec]["l4_full"])]
-        axes[2].plot(xs, r2, "o-", color=col[dec], label=f"{dec} MSE ratio")
-        axes[2].plot(xs, r4, "s--", color=col[dec], alpha=0.7, label=f"{dec} L4 ratio")
+    for lab in labels:
+        r2 = [s / f for s, f in zip(data[lab]["l2_single"], data[lab]["l2_full"])]
+        r4 = [s / f for s, f in zip(data[lab]["l4_single"], data[lab]["l4_full"])]
+        axes[2].plot(xs, r2, "o-", color=colr[lab], label=f"{lab} MSE ratio")
+        axes[2].plot(xs, r4, "s--", color=colr[lab], alpha=0.7, label=f"{lab} L4 ratio")
     axes[2].set_xscale("log"); axes[2].axhline(1.0, color="k", lw=0.8, ls=":")
     axes[2].set_xlabel("data sparsity p"); axes[2].set_ylabel("single / full  (full = benchmark)")
     axes[2].set_title("single-component / full-model ratio", fontsize=10)
     axes[2].grid(True, alpha=0.3, which="both"); axes[2].legend(fontsize=7)
-    tok = _swap_tok(swaps)
     fig.suptitle(f"Single ExactPD component vs full model across p — one-hot forward-pass loss "
-                 f"(K={K}, {'overlap-min' if tok else 'no-swap'})", fontsize=12)
-    out = os.path.join(OVERVIEW_FIG, f"biregular_single_vs_full_overview_K{K}{tok}.png")
+                 f"({ctx})", fontsize=12)
+    out = os.path.join(OVERVIEW_FIG, f"{stem}.png")
     fig.savefig(out, dpi=140, bbox_inches="tight"); plt.close(fig); print(f"  saved {out}")
 
     # results table
-    cols = ["decoder", "p", "MSE single", "MSE full", "MSE ratio",
+    cols = ["series", "p", "MSE single", "MSE full", "MSE ratio",
             "L4 single", "L4 full", "L4 ratio"]
-    lines = [f"### Biregular K{K} ({'overlap-min' if tok else 'no-swap'}): single-vs-full "
-             f"forward-pass loss across p", "",
+    lines = [f"### {ctx}: single-vs-full forward-pass loss across p", "",
              "| " + " | ".join(cols) + " |", "|" + "|".join(["---"] * len(cols)) + "|"]
-    for dec in decoders:
+    for lab in labels:
         for i, p in enumerate(PS):
-            s2, f2 = data[dec]["l2_single"][i], data[dec]["l2_full"][i]
-            s4, f4 = data[dec]["l4_single"][i], data[dec]["l4_full"][i]
-            lines.append("| " + " | ".join([dec, p, f"{s2:.3e}", f"{f2:.3e}", f"{s2/f2:.3f}",
+            s2, f2 = data[lab]["l2_single"][i], data[lab]["l2_full"][i]
+            s4, f4 = data[lab]["l4_single"][i], data[lab]["l4_full"][i]
+            lines.append("| " + " | ".join([lab, p, f"{s2:.3e}", f"{f2:.3e}", f"{s2/f2:.3f}",
                          f"{s4:.3e}", f"{f4:.3e}", f"{s4/f4:.3f}"]) + " |")
-    stem = os.path.join(OVERVIEW_RES, f"biregular_single_vs_full_overview_K{K}{tok}")
-    with open(stem + ".md", "w") as f:
+    path = os.path.join(OVERVIEW_RES, stem)
+    with open(path + ".md", "w") as f:
         f.write("\n".join(lines) + "\n")
-    print(f"  saved {stem}.md")
+    print(f"  saved {path}.md")
 
 
 def _spectrum_models(K: int, p: str, device="cpu", swaps: int = 0) -> list:
@@ -427,88 +463,112 @@ def plot_output_loss_decomposition(K: int, p: str, device="cpu", swaps: int = 0)
 ON_COLOR, OFF_COLOR = "tab:orange", "tab:purple"
 
 
-def plot_io_spectrum_style(K: int, p: str, c: int, device="cpu", swaps: int = 0) -> None:
+def plot_io_spectrum_style(K: int, p: str, c: int, device="cpu", swaps: int = 0,
+                           entries=None, tag=None, stem: str | None = None,
+                           ctx: str | None = None) -> None:
     """Single-component vs full-model I/O response in the output-spectrum panel style: raw
     SIGNED output vs feature index j, self/target bar (j==c) red, off-target steelblue,
-    shared y. 2×2 grid (rows = pinv/transpose decoder, cols = full model | single ExactPD
-    component of feature c). Single = one red spike at c (off-target == 0)."""
+    shared y. Rows = models (biregular pinv/transpose by default, or the passed `entries`),
+    cols = full model | single ExactPD component of feature c. Single = one red spike at c."""
     os.makedirs(OVERVIEW_FIG, exist_ok=True)
     F = 100
-    decs = ["pinv", "transpose"]
-    data = {dec: (lambda r: (r["R"][c], r["S"][c]))(analyse(K, swaps, p, device=device, decoder=dec))
-            for dec in decs}
-    ymax = max(float(np.abs(v).max()) for dec in decs for v in data[dec]) * 1.08
+    tok = _swap_tok(swaps) if tag is None else tag
+    if stem is None:
+        stem = f"biregular_io_spectrum_K{K}{tok}_p{p}_c{c}"
+    if ctx is None:
+        descr = f", {tag.lstrip('_')}" if tag else (", overlap-min" if swaps else "")
+        ctx = f"K={K}, p={p}{descr}"
+    if entries is None:
+        entries = [(dec, analyse(K, swaps, p, device=device, decoder=dec))
+                   for dec in ("pinv", "transpose")]
+    data = [(lab, r["R"][c], r["S"][c]) for lab, r in entries]
+    ymax = max(float(np.abs(v).max()) for _, o, s in data for v in (o, s)) * 1.08
 
-    fig, axes = plt.subplots(len(decs), 2, figsize=(13, 6.4), squeeze=False,
+    fig, axes = plt.subplots(len(data), 2, figsize=(13, 3.2 * len(data)), squeeze=False,
                              constrained_layout=True, sharey=True)
-    for row, dec in enumerate(decs):
-        for col, (which, o) in enumerate(zip(("full model", "single component c"), data[dec])):
+    for row, (lab, full, single) in enumerate(data):
+        for col, (which, o) in enumerate((("full model", full), ("single component c", single))):
             ax = axes[row][col]
             colors = ["indianred" if j == c else "steelblue" for j in range(F)]
             ax.bar(range(F), o, width=1.0, color=colors)
             ax.axhline(0, color="k", lw=0.5)
             leak = float(np.sqrt(max(0.0, (o ** 2).sum() - o[c] ** 2)))   # clamp fp noise >=0
-            ax.set_title(f"{dec} — {which}:  s_c={o[c]:.3f}   off-target ‖·‖={leak:.3f}", fontsize=9)
+            ax.set_title(f"{lab} — {which}:  s_c={o[c]:.3f}   off-target ‖·‖={leak:.3f}", fontsize=9)
             ax.set_ylim(-ymax, ymax)
-            if row == len(decs) - 1:
+            if row == len(data) - 1:
                 ax.set_xlabel("output feature j")
         axes[row][0].set_ylabel("output value")
     fig.suptitle(f"I/O response, single component vs full model (one-hot input e_{c}; "
-                 f"red = target feature {c})  —  K={K}, p={p}"
-                 f"{_swap_tok(swaps) and ', overlap-min'}", fontsize=12)
-    out = os.path.join(OVERVIEW_FIG, f"biregular_io_spectrum_K{K}{_swap_tok(swaps)}_p{p}_c{c}.png")
+                 f"red = target feature {c})  —  {ctx}", fontsize=12)
+    out = os.path.join(OVERVIEW_FIG, f"{stem}.png")
     fig.savefig(out, dpi=140, bbox_inches="tight"); plt.close(fig); print(f"  saved {out}")
 
 
-def plot_sf_loss_spectrum(K: int, p: str, c: int, device="cpu", swaps: int = 0) -> None:
+def plot_sf_loss_spectrum(K: int, p: str, c: int, device="cpu", swaps: int = 0,
+                          entries=None, tag=None, stem: str | None = None,
+                          ctx: str | None = None) -> None:
     """Per-c loss spectrum: per-feature squared error for the FULL model vs the SINGLE
-    ExactPD component of the one-hot input feature c, for pinv and transpose decoders.
-    Bars coloured by kind: on-target attenuation (j==c, orange) vs off-target leakage
-    (j!=c, purple). Single component = only the on-target bar (off-target == 0)."""
+    ExactPD component of the one-hot input feature c. Rows = models (biregular pinv/transpose
+    by default, or the passed `entries`). Bars coloured by kind: on-target attenuation (j==c,
+    orange) vs off-target leakage (j!=c, purple). Single = only the on-target bar (off == 0)."""
     os.makedirs(OVERVIEW_FIG, exist_ok=True)
     F = 100
-    decs = ["pinv", "transpose"]
-    data = {}
-    for dec in decs:
-        r = analyse(K, swaps, p, device=device, decoder=dec)
-        R, S = r["R"], r["S"]
-        tgt = np.zeros(F); tgt[c] = 1.0                       # relu(e_c) = e_c
-        data[dec] = ((R[c] - tgt) ** 2, (S[c] - tgt) ** 2)    # per-feature squared error
-    ymax = max(v.max() for dec in decs for v in data[dec]) * 1.1
+    tok = _swap_tok(swaps) if tag is None else tag
+    if stem is None:
+        stem = f"biregular_sf_loss_spectrum_K{K}{tok}_p{p}_c{c}"
+    if ctx is None:
+        descr = f", {tag.lstrip('_')}" if tag else (", overlap-min" if swaps else "")
+        ctx = f"K={K}, p={p}{descr}"
+    if entries is None:
+        entries = [(dec, analyse(K, swaps, p, device=device, decoder=dec))
+                   for dec in ("pinv", "transpose")]
+    tgt = np.zeros(F); tgt[c] = 1.0                           # relu(e_c) = e_c
+    data = [(lab, (r["R"][c] - tgt) ** 2, (r["S"][c] - tgt) ** 2) for lab, r in entries]
+    ymax = max(v.max() for _, ef, es in data for v in (ef, es)) * 1.1
 
-    fig, axes = plt.subplots(len(decs), 2, figsize=(13, 6.4), squeeze=False,
+    fig, axes = plt.subplots(len(data), 2, figsize=(13, 3.2 * len(data)), squeeze=False,
                              constrained_layout=True, sharey=True)
-    for row, dec in enumerate(decs):
-        for col, (which, err) in enumerate(zip(("full model", "single component c"), data[dec])):
+    for row, (lab, errF, errS) in enumerate(data):
+        for col, (which, err) in enumerate((("full model", errF), ("single component c", errS))):
             ax = axes[row][col]
             colors = [ON_COLOR if j == c else OFF_COLOR for j in range(F)]
             ax.bar(range(F), err, width=1.0, color=colors)
             on = float(err[c]); off = float(err.sum() - err[c])
-            ax.set_title(f"{dec} — {which}\n on={on:.2e}  off={off:.2e}  total={on+off:.2e}",
+            ax.set_title(f"{lab} — {which}\n on={on:.2e}  off={off:.2e}  total={on+off:.2e}",
                          fontsize=9)
             ax.set_ylim(0, ymax)
-            if row == len(decs) - 1:
+            if row == len(data) - 1:
                 ax.set_xlabel("output feature j")
         axes[row][0].set_ylabel("squared error")
     handles = [plt.Rectangle((0, 0), 1, 1, color=ON_COLOR),
                plt.Rectangle((0, 0), 1, 1, color=OFF_COLOR)]
     axes[0][0].legend(handles, ["on-target (attenuation)", "off-target (leakage)"], fontsize=7)
     fig.suptitle(f"Loss spectrum — full model vs single ExactPD component, one-hot input e_{c}  "
-                 f"(K={K}, p={p}{_swap_tok(swaps) and ', overlap-min'})", fontsize=12)
-    out = os.path.join(OVERVIEW_FIG, f"biregular_sf_loss_spectrum_K{K}{_swap_tok(swaps)}_p{p}_c{c}.png")
+                 f"({ctx})", fontsize=12)
+    out = os.path.join(OVERVIEW_FIG, f"{stem}.png")
     fig.savefig(out, dpi=140, bbox_inches="tight"); plt.close(fig); print(f"  saved {out}")
 
 
-def plot_sf_loss_decomp(K: int, p: str, device="cpu", swaps: int = 0) -> None:
+def plot_sf_loss_decomp(K: int, p: str, device="cpu", swaps: int = 0,
+                        entries=None, tag=None, stem: str | None = None,
+                        ctx: str | None = None) -> None:
     """Aggregated on/off-target squared-error profile (SSE, no /F), FULL model vs SINGLE
-    ExactPD component, averaged over all 100 components, for pinv and transpose. Single =
-    on-target only (off-target == 0 by construction)."""
+    ExactPD component, averaged over all 100 components. Models = biregular pinv/transpose by
+    default, or the passed `entries`. Single = on-target only (off-target == 0)."""
     os.makedirs(OVERVIEW_FIG, exist_ok=True); os.makedirs(OVERVIEW_RES, exist_ok=True)
     F = 100
     I = np.eye(F)
+    tok = _swap_tok(swaps) if tag is None else tag
+    if stem is None:
+        stem = f"biregular_sf_loss_decomp_K{K}{tok}_p{p}"
+    if ctx is None:
+        descr = f", {tag.lstrip('_')}" if tag else (", overlap-min" if swaps else "")
+        ctx = f"K={K}, p={p}{descr}"
+    if entries is None:
+        entries = [(dec, analyse(K, swaps, p, device=device, decoder=dec))
+                   for dec in ("pinv", "transpose")]
     rows = []   # (label, on_mse, off_mse, on_l4, off_l4)
-    for dec in ["pinv", "transpose"]:
-        r = analyse(K, swaps, p, device=device, decoder=dec)
+    for dec, r in entries:
         for which, M in (("full", r["R"]), ("single", r["S"])):
             d = M - I
             diag = np.diagonal(d)
@@ -536,23 +596,22 @@ def plot_sf_loss_decomp(K: int, p: str, device="cpu", swaps: int = 0) -> None:
         ax.set_title(ttl, fontsize=10)
         ax.set_ylabel("Σ squared error over outputs (SSE, no /F)")
         ax.legend(fontsize=8)
-    tok = _swap_tok(swaps)
     fig.suptitle(f"On/off-target loss profile — full model vs single ExactPD component "
-                 f"(avg over 100 components; single = on-target only)  —  K={K}, p={p}"
-                 f"{tok and ', overlap-min'}", fontsize=11)
-    out = os.path.join(OVERVIEW_FIG, f"biregular_sf_loss_decomp_K{K}{tok}_p{p}.png")
+                 f"(avg over 100 components; single = on-target only)  —  {ctx}",
+                 fontsize=11)
+    out = os.path.join(OVERVIEW_FIG, f"{stem}.png")
     fig.savefig(out, dpi=140, bbox_inches="tight"); plt.close(fig); print(f"  saved {out}")
 
     cols = ["decoder/which", "MSE on", "MSE off", "MSE total", "L4 on", "L4 off", "L4 total"]
-    lines = [f"### Full vs single on/off-target loss profile (K{K}, p={p}{tok}, SSE scale)", "",
+    lines = [f"### Full vs single on/off-target loss profile ({ctx}, SSE scale)", "",
              "| " + " | ".join(cols) + " |", "|" + "|".join(["---"] * len(cols)) + "|"]
     for lab, om, ofm, ol, ofl in rows:
         lines.append(f"| {lab.replace(chr(10),' ')} | {om:.3e} | {ofm:.3e} | {om+ofm:.3e} | "
                      f"{ol:.3e} | {ofl:.3e} | {ol+ofl:.3e} |")
-    stem = os.path.join(OVERVIEW_RES, f"biregular_sf_loss_decomp_K{K}{tok}_p{p}")
-    with open(stem + ".md", "w") as f:
+    path = os.path.join(OVERVIEW_RES, stem)
+    with open(path + ".md", "w") as f:
         f.write("\n".join(lines) + "\n")
-    print(f"  saved {stem}.md")
+    print(f"  saved {path}.md")
 
 
 def main():
@@ -578,6 +637,7 @@ def main():
                     help="biregular code overlap-min swaps (0 = no-swap; SWAPS for overlap-min)")
     ap.add_argument("--device", default="cpu")
     a = ap.parse_args()
+
     if a.overview:
         plot_single_vs_full_overview(a.K, device=a.device, swaps=a.swaps)
         return
@@ -597,6 +657,7 @@ def main():
     if a.io_spectrum:
         plot_io_spectrum_style(a.K, a.p, a.c, device=a.device, swaps=a.swaps)
         return
+    # default run: single-vs-full bar/ratio/io-response figures for both code variants
     tag = "" if a.decoder == "pinv" else f"_{a.decoder}"
     res = {}
     for name, sw in VARIANTS:
