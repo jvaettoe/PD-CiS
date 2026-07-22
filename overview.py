@@ -168,7 +168,7 @@ def effective_count_heatmap(n_exp, device="cpu"):
 
 def behavioural_count_heatmap(n_exp, device="cpu"):
     """Independent, MODEL-ONLY count of features effectively computed: soft count
-    n_soft = sum(max(0, R2_i)) from MLP.per_feature_r2 at each model's own training
+    n_soft = sum(max(0, R2_i)) from MLPBase.per_feature_r2 at each model's own training
     sparsity p (interference included). Same grid/style as effective_count_heatmap
     so the two read side by side. Returns {(demb_label, d_mlp, p_float): n_soft}
     for the agreement scatter."""

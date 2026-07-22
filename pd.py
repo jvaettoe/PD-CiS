@@ -380,7 +380,7 @@ class PD(PDViz, nn.Module, ABC):
     def per_feature_r2(self, p: float, *, batch: int = 8192, n_batches: int = 25,
                        seed: int = 9999, isolated: bool = False) -> Float[Tensor, "n_features"]:
         """BEHAVIOURAL per-feature computation quality of the DECOMPOSITION's own
-        forward -- the exact analog of MLP.per_feature_r2, but the prediction is
+        forward -- the exact analog of MLPBase.per_feature_r2, but the prediction is
         self.forward_dense(x) (every decomposed weight replaced by its
         Σ-all-components reconstruction) instead of model(x). For VPD, whose
         reconstruction EXCLUDES the delta component (masked_weight(name, None) = V@U),
@@ -389,7 +389,7 @@ class PD(PDViz, nn.Module, ABC):
         exact decomposition (ExactPD, faithfulness == 0) this equals the model's own
         per_feature_r2 to numerical precision.
 
-        Same R^2 convention as MLP.per_feature_r2: active-conditional MSE over
+        Same R^2 convention as MLPBase.per_feature_r2: active-conditional MSE over
         n_batches fresh batches at sparsity p (isolated=True -> exactly one active
         feature), normalised against the always-predict-0 baseline E[x_i^2 | x_i>0] =
         1/3, so R2_i = 1 - MSE_i/(1/3). Callers derive n_soft = Σ max(0, R2_i)."""

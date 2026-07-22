@@ -18,7 +18,7 @@ import matplotlib.pyplot as plt
 from matplotlib.cm import ScalarMappable
 from matplotlib.colors import Normalize
 
-from mlp import MLP, LinearMLP, EmbedMLP
+from mlp import MLPBase, LinearMLP, EmbedMLP
 from data import SparseDataset, CleanDataset
 from pd import APD, OracleAPD, SPD
 from results_io import _fmt_n
@@ -28,7 +28,7 @@ def set_seed(seed: int):
     np.random.seed(seed)
     random.seed(seed)
 
-def train(model: MLP, dataset: SparseDataset, n: float = 2, batch_size: int = 2048,
+def train(model: MLPBase, dataset: SparseDataset, n: float = 2, batch_size: int = 2048,
           steps: int = 10_000, cosine_scheduler: bool = True) -> list[float]:
     """Trains MLP with L_n loss, set to MSE as default"""
     parameters = list(model.parameters())
@@ -91,13 +91,13 @@ def checkpoint_path(str_p: str, model_cls: type, model_kwargs: dict,
     return os.path.join(ckpt_dir, fname)
 
 
-def save_checkpoint(path: str, model: MLP, dataset: SparseDataset,
+def save_checkpoint(path: str, model: MLPBase, dataset: SparseDataset,
                     losses: list[float], *, seed: int, n_steps: int,
                     batch_size: int = 2048, cosine_scheduler: bool = True,
                     n_exp: float = 2.0) -> None:
     """Persist everything needed to reconstruct model AND dataset deterministically.
     device is deliberately not saved (machine-dependent; chosen at load time).
-    Model is stored generically via its class name + config() so any MLP subclass
+    Model is stored generically via its class name + config() so any MLPBase subclass
     (LinearMLP, EmbedMLP, ...) round-trips."""
     os.makedirs(os.path.dirname(path), exist_ok=True)
     payload = {
@@ -126,7 +126,7 @@ def save_checkpoint(path: str, model: MLP, dataset: SparseDataset,
 
 def load_checkpoint(path: str, device: str | None = None) -> dict:
     """Reconstruct a run from a checkpoint. Returns
-    {"model": MLP, "dataset": SparseDataset, "losses": list[float], "meta": payload}."""
+    {"model": MLPBase, "dataset": SparseDataset, "losses": list[float], "meta": payload}."""
     payload = torch.load(path, map_location=device or "cpu", weights_only=False)
 
     model_cls = _MODEL_REGISTRY[payload["model_class"]]
@@ -150,7 +150,7 @@ def load_or_train(str_p: str, model_cls: type = LinearMLP,
                   ckpt_dir: str = CKPT_DIR, device: str | None = None,
                   n_exp: float = 2.0) -> dict:
     """Loads a matching checkpoint if one exists, otherwise trains from scratch and
-    saves it. Generic over MLP subclass: the caller specializes by passing model_cls
+    saves it. Generic over MLPBase subclass: the caller specializes by passing model_cls
     and model_kwargs, e.g. load_or_train("0.1", LinearMLP, {"n_features":50,"d_mlp":50})
     or load_or_train("0.1", EmbedMLP, {"n_features":50,"d_emb":16,"d_mlp":50}). The
     dataset shares n_features with the model (read from model_kwargs). n_exp is the
@@ -180,7 +180,7 @@ def load_or_train(str_p: str, model_cls: type = LinearMLP,
 
 
 # --------------------------------------------------------------------------
-# Demo: the generic train/save/reload path specialised to each MLP subclass.
+# Demo: the generic train/save/reload path specialised to each MLPBase subclass.
 # The checkpoint machinery is architecture-agnostic (model.config() + registry);
 # here "main" picks LinearMLP and EmbedMLP concretely and renders the
 # feature-space weight-space plots (projected through readin()/readout() for

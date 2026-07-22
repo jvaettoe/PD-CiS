@@ -17,7 +17,7 @@ from data import CleanDataset
 from pd import PD
 
 
-class MLP(nn.Module, ABC):
+class MLPBase(nn.Module, ABC):
     "Base class for simple single-layer MLP modules, no biases"
     def __init__(self, d_in: int, d_mlp: int, d_out: int, device: str | None = None):
         super().__init__()
@@ -41,7 +41,7 @@ class MLP(nn.Module, ABC):
     @abstractmethod
     def config(self) -> dict:
         """Constructor kwargs (excluding device) needed to rebuild this model.
-        Consumed by cc.save_checkpoint so any MLP subclass round-trips generically.
+        Consumed by cc.save_checkpoint so any MLPBase subclass round-trips generically.
         Abstract because the base has no n_features -- each subclass declares its own."""
         ...
 
@@ -238,7 +238,7 @@ class MLP(nn.Module, ABC):
         return ax
 
 
-class LinearMLP(MLP):
+class LinearMLP(MLPBase):
     """simple single-layer MLP module, no biases."""
  
     def __init__(self, n_features: int, d_mlp: int, device: str | None = None):
@@ -256,7 +256,7 @@ class LinearMLP(MLP):
         return pd.decomp_op("w_out", h, mode=mode)
  
  
-class EmbedMLP(MLP):
+class EmbedMLP(MLPBase):
     """simple single-layer embedded MLP module, no biases."""
  
     def __init__(self, n_features: int, d_emb: int, d_mlp: int, device: str | None = None):

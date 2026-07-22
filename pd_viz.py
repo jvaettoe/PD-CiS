@@ -2,7 +2,7 @@
 
 `PDViz` is a STATELESS mixin inherited by `pd.PD`, so every decomposition object
 exposes its figures directly (`pd_obj.plot_components()`, `pd_obj.plot_faithfulness()`,
-...) in the same house style as `mlp.MLP`'s in-class plots -- while `pd.py` itself
+...) in the same house style as `mlp.MLPBase`'s in-class plots -- while `pd.py` itself
 stays pure decomposition math (this module owns the matplotlib dependency).
 
 The mixin uses only the public PD API: `C`, `model`, `component_signatures`,

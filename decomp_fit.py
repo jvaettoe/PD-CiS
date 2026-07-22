@@ -16,7 +16,7 @@ import cc
 import results_io
 from cc import set_seed
 from data import SparseDataset
-from mlp import MLP
+from mlp import MLPBase
 from pd import PD, APD, OracleAPD, SPD, ExactPD
 from vpd import VPD
 
@@ -60,7 +60,7 @@ ALPHA_SIMPLICITY = 1.0
 SPD_PARAM_SPECS = {"w_in": "matmul", "w_out": "matmul"}
 
 
-def build_pd(method: str, model: MLP, C: int, rank: int = APD_RANK) -> PD:
+def build_pd(method: str, model: MLPBase, C: int, rank: int = APD_RANK) -> PD:
     """Instantiate the decomposition for `method`. The model is frozen inside
     PD.__init__ (requires_grad_(False)), so only the decomposition's own params
     are trainable. `rank` is the APD/OracleAPD component rank budget (ignored by
