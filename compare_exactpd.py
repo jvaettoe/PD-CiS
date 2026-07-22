@@ -152,7 +152,7 @@ def main():
                            f"*dmlp{a.d_mlp}*_{a.method}.pt")
         run_ids = [os.path.basename(p)[:-3] for p in sorted(glob.glob(pat))]
     else:
-        demb = None if a.model == "LinearMLP" else a.demb
+        demb = None if a.model == "MLP" else a.demb
         run_ids = [results_io.make_run_id(model=a.model, d_emb=demb, d_mlp=a.d_mlp,
                                           p=a.p, n_exp=a.n_exp, method=a.method)]
 

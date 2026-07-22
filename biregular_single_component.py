@@ -1,6 +1,6 @@
 """ExactPD single-component vs full-model one-hot response on the biregular code.
 
-The biregular code models are analytic LinearMLPs: w_in = a*M + b*(1-M) (rows =
+The biregular code models are analytic MLPs: w_in = a*M + b*(1-M) (rows =
 features), w_out = c*pinv(M.T).T. ExactPD on one gives one rank-1 component per
 feature = row c of readin / column c of readout. We probe the interference the code
 introduces by feeding the one-hot input e_c and comparing:
@@ -52,7 +52,7 @@ def _swap_tok(swaps: int) -> str:
 
 
 def analyse(K: int, swaps: int, p: str, device="cpu", decoder: str = "pinv") -> dict:
-    """Biregular wrapper: build the biregular LinearMLP for (K, swaps, decoder) at p, then
+    """Biregular wrapper: build the biregular MLP for (K, swaps, decoder) at p, then
     run the model-agnostic single-component analysis. Adds the biregular `sq_overlap`."""
     ans = _code(K, swaps, decoder)
     model = ans.model(ans.fit_abc(float(p), device=device), device=device)
@@ -62,10 +62,10 @@ def analyse(K: int, swaps: int, p: str, device="cpu", decoder: str = "pinv") -> 
 
 
 def _analyse_model(model, p: str, device="cpu") -> dict:
-    """Model-agnostic core: run ExactPD on any LinearMLP/MLP, return the full one-hot
+    """Model-agnostic core: run ExactPD on any MLP, return the full one-hot
     response matrix R, the single-component matrix S (explicit forward_masked), and derived
     per-feature / global interference + per-probe loss metrics. Works for the biregular codes
-    and the trained LinearMLP alike (ExactPD component c writes only to output c → single =
+    and the trained MLP alike (ExactPD component c writes only to output c → single =
     on-target only)."""
     pd_e = ExactPD(model)
     F = model.n_features
@@ -290,16 +290,16 @@ def plot_single_vs_full_overview(K: int, device="cpu", swaps: int = 0,
 
 def _spectrum_models(K: int, p: str, device="cpu", swaps: int = 0) -> list:
     """The four models compared in the output-spectrum views (name, model), all
-    LinearMLP/MLP instances so model(one-hot) gives the 100-d output. LinearMLP entry may
+    MLP instances so model(one-hot) gives the 100-d output. MLP entry may
     be None if its checkpoint is missing. `swaps` selects no-swap (0) or overlap-min biregular
-    code; LinearMLP/ignore-50 are swap-independent."""
+    code; MLP/ignore-50 are swap-independent."""
     tag = "no-swap" if swaps == 0 else "overlap-min"
     ap = _code(K, swaps, "pinv")
     at = _code(K, swaps, "transpose")
     return [
         (f"biregular pinv ({tag})", ap.model(ap.fit_abc(float(p), device=device), device=device)),
         (f"biregular transpose ({tag})", at.model(at.fit_abc(float(p), device=device), device=device)),
-        ("LinearMLP (fully-trained d50)", _load_trained("LinearMLP", None, 50, p, 4.0, device)),
+        ("MLP (fully-trained d50)", _load_trained("MLP", None, 50, p, 4.0, device)),
         ("ignore-50 (no superposition)", ignore_half_model(device=device)),
     ]
 
@@ -307,7 +307,7 @@ def _spectrum_models(K: int, p: str, device="cpu", swaps: int = 0) -> list:
 def plot_output_spectrum(K: int, p: str, c: int, device="cpu", swaps: int = 0) -> None:
     """Output spectrum for a one-hot input e_c: raw signed output value vs output-feature
     index j, for four models side by side (biregular pinv / transpose, fully-trained
-    LinearMLP d50, and the ignore-50 no-superposition baseline). Reveals how each model's
+    MLP d50, and the ignore-50 no-superposition baseline). Reveals how each model's
     response concentrates on the target vs leaks into other outputs."""
     os.makedirs(OVERVIEW_FIG, exist_ok=True)
     F = 100

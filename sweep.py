@@ -18,7 +18,7 @@ import matplotlib
 matplotlib.use("Agg")  # headless: render figures without a display
 
 import cc
-from mlp import LinearMLP, EmbedMLP
+from mlp import MLP, EmbedMLP
 import decomp_fit
 import results_io
 import figutil
@@ -50,7 +50,7 @@ def _demb_tok(d_emb: int | None) -> str:
 def iter_model_specs(smoke: bool = False, n_exps=None, drop_demb=None, d_mlp=D_MLP,
                      no_linear=False):
     """Yield one spec dict per model to train: EmbedMLP over n_exp x p x d_emb,
-    plus a LinearMLP baseline over n_exp x p (d_emb inapplicable -> None).
+    plus a MLP baseline over n_exp x p (d_emb inapplicable -> None).
     n_exps overrides the exponent list AND its order (used to reprioritise which
     rows run first); drop_demb excludes those embedding dims (e.g. the expensive
     d_emb=1000 in a fast preliminary); d_mlp overrides the hidden width (now
@@ -73,7 +73,7 @@ def iter_model_specs(smoke: bool = False, n_exps=None, drop_demb=None, d_mlp=D_M
         return
     for n_exp, str_p in itertools.product(n_exps, ps):
         yield {
-            "model": "LinearMLP", "model_cls": LinearMLP, "d_emb": None,
+            "model": "MLP", "model_cls": MLP, "d_emb": None,
             "model_kwargs": {"n_features": N_FEATURES, "d_mlp": d_mlp},
             "str_p": str_p, "n_exp": n_exp,
         }
@@ -287,7 +287,7 @@ if __name__ == "__main__":
                     help=f"hidden width (default {D_MLP}); first-class in the run_id, so "
                          f"distinct widths land in distinct files (e.g. --d-mlp 100)")
     ap.add_argument("--no-linear", action="store_true", dest="no_linear",
-                    help="skip the LinearMLP baselines (decompose only EmbedMLP cells)")
+                    help="skip the MLP baselines (decompose only EmbedMLP cells)")
     args = ap.parse_args()
     main(smoke=args.smoke, methods=args.methods, device=args.device,
          base_steps=args.base_steps, force=args.force, n_exps=args.n_exps,

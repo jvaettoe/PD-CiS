@@ -1,5 +1,5 @@
 """Benchmark trained-model FINAL LOSS (and loss curves) across d_emb, for a given
-loss exponent n:  EmbedMLP d_mlp=50  vs  EmbedMLP d_mlp=100  vs  LinearMLP d_mlp={50,100}.
+loss exponent n:  EmbedMLP d_mlp=50  vs  EmbedMLP d_mlp=100  vs  MLP d_mlp={50,100}.
 
 Reads cached checkpoints directly (each stores the full `losses` curve).
   ./.venv/bin/python bench_final_loss.py --n 4
@@ -32,9 +32,9 @@ SERIES = {  # label -> (model_class, d_mlp, colour, marker)
     "EmbedMLP d_mlp=50":  ("EmbedMLP", 50,  "#1f77b4", "o"),
     "EmbedMLP d_mlp=100": ("EmbedMLP", 100, "#ff7f0e", "s"),
 }
-BASELINES = {  # label -> (model_class, d_mlp, colour); LinearMLP has no d_emb -> horizontal
-    "LinearMLP d_mlp=50 (baseline)":  ("LinearMLP", 50,  "#2ca02c"),
-    "LinearMLP d_mlp=100 (baseline)": ("LinearMLP", 100, "#d62728"),
+BASELINES = {  # label -> (model_class, d_mlp, colour); MLP has no d_emb -> horizontal
+    "MLP d_mlp=50 (baseline)":  ("MLP", 50,  "#2ca02c"),
+    "MLP d_mlp=100 (baseline)": ("MLP", 100, "#d62728"),
 }
 
 
@@ -65,7 +65,7 @@ def scan(n):
 def plot_final_vs_demb(data, n):
     fig, axes = plt.subplots(1, len(PS), figsize=(4 * len(PS), 4.2), sharey=True)
     for ax, p in zip(axes, PS):
-        # baselines (LinearMLP, no d_emb) -> horizontal references
+        # baselines (MLP, no d_emb) -> horizontal references
         for blabel, (bcls, bdmlp, bcolour) in BASELINES.items():
             bl = data.get((bcls, bdmlp, None, p))
             if bl:
@@ -94,7 +94,7 @@ def plot_final_vs_demb(data, n):
 
 
 def plot_curves(data, n, demb=200):
-    """Loss curves at one representative d_emb, per p; LinearMLP overlaid."""
+    """Loss curves at one representative d_emb, per p; MLP overlaid."""
     fig, axes = plt.subplots(1, len(PS), figsize=(4 * len(PS), 4.2), sharey=True)
     for ax, p in zip(axes, PS):
         for label, (cls, dmlp, colour, _) in SERIES.items():   # marker unused for curves
@@ -122,14 +122,14 @@ def plot_curves(data, n, demb=200):
 def n_trainable(cls, dmlp, demb):
     """Trainable params = w_in + w_out only (EmbedMLP's w_e is a fixed buffer).
     EmbedMLP: w_in(d_emb x d_mlp) + w_out(d_mlp x d_emb) = 2*d_emb*d_mlp.
-    LinearMLP: w_in(100 x d_mlp) + w_out(d_mlp x 100) = 2*100*d_mlp."""
+    MLP: w_in(100 x d_mlp) + w_out(d_mlp x 100) = 2*100*d_mlp."""
     return 2 * (demb if cls == "EmbedMLP" else 100) * dmlp
 
 
 def plot_loss_vs_params(data, n):
     """Final loss vs TRAINABLE parameter count -- collapses all four models onto a
     single capacity axis. EmbedMLP series sweep d_emb (params grow with d_emb);
-    LinearMLP baselines are single points. At a given x, the lowest point wins per
+    MLP baselines are single points. At a given x, the lowest point wins per
     parameter -> isolates architecture from raw capacity."""
     fig, axes = plt.subplots(1, len(PS), figsize=(4 * len(PS), 4.2), sharey=True)
     for ax, p in zip(axes, PS):

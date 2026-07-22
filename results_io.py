@@ -70,8 +70,8 @@ def _fmt_n(n_exp: float) -> str:
 def make_run_id(*, model: str, d_emb: int | None, d_mlp: int, p: str,
                 n_exp: float, method: str) -> str:
     """Stable, human-readable slug from the identifying config. d_emb=None
-    (LinearMLP) -> 'NA'. Example: 'EmbedMLP_demb200_dmlp100_p0.1_n4_APD',
-    'LinearMLP_dembNA_dmlp50_p0.1_n4_APD'.
+    (MLP) -> 'NA'. Example: 'EmbedMLP_demb200_dmlp100_p0.1_n4_APD',
+    'MLP_dembNA_dmlp50_p0.1_n4_APD'.
 
     d_mlp is now first-class in the slug so the d_mlp=50 and d_mlp=100 sweeps get
     DISTINCT run_ids (they previously collided, distinguished only by a tag dir).
@@ -177,7 +177,7 @@ def append_summary_rows(run_id: str, config: dict,
                         finals: dict[str, float]) -> None:
     """Append one long row per (term, final_value). Header is written once. The
     row's config fields come from `config` (missing keys -> ''); `d_emb` is blank
-    for LinearMLP and `k` blank for SPD by simply being absent/None in config."""
+    for MLP and `k` blank for SPD by simply being absent/None in config."""
     path = summary_path(parse_run_id(run_id)["n_exp"])
     os.makedirs(os.path.dirname(path), exist_ok=True)
     write_header = not os.path.exists(path)

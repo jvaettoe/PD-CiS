@@ -14,7 +14,7 @@ trains a toy residual MLP WITH the adversarial PGD loss):
     FaithfulnessLoss coeff 0.0 + a 200-step faithfulness warmup (lr 0.01)
     constant lr 3e-4, batch 2048, use_delta_component true, ci_alive_threshold 0.1
 
-Documented adaptations for this repo's toy MLPs (LinearMLP / EmbedMLP, raw nn.Parameter
+Documented adaptations for this repo's toy MLPs (MLP / EmbedMLP, raw nn.Parameter
 weights, regression):
   - Reconstruction loss is MSE on model outputs (their TMS/resid-MLP setting), not KL on
     logits; no sequence dimension anywhere (masks are [B, C]).

@@ -15,9 +15,9 @@ to data at a chosen sparsity -- so the model DOES depend on p through them. We r
 (a, b, c) at each swept p, so every p is its own optimal model and the full ExactPD
 suite genuinely varies with p.
 
-Their SimpleMLP is y = relu(x @ W_in.T) @ W_out.T = our LinearMLP's relu(x @ w_in) @ w_out
+Their SimpleMLP is y = relu(x @ W_in.T) @ W_out.T = our MLP's relu(x @ w_in) @ w_out
 under the transpose w_in = W_in.T = a*M + b*(1-M) (F, N), w_out = W_out.T = (c*pinv(M.T)).T
-(N, F). So we build a LinearMLP, inject those weights, and reuse the ExactPD / component-viz
+(N, F). So we build a MLP, inject those weights, and reuse the ExactPD / component-viz
 stack unchanged.
 
   ./.venv/bin/python biregular_ansatz.py --K 5                  # single cell, refit at p=0.02
@@ -35,7 +35,7 @@ import torch
 import codes
 import decomp_fit
 from data import CleanDataset
-from mlp import LinearMLP
+from mlp import MLP
 from pd import ExactPD
 
 F, N, P = 100, 50, 0.02   # feature count, neuron count, default/design sparsity (as in the paper)
@@ -64,7 +64,7 @@ class CodeAnsatz:
     (cached). The 3-scalar model is
         w_in = a*M + b*(1-M),   w_out = c * (pinv(M.T)).T
     i.e. the decoder stays a scaled pseudoinverse of the code; only a, b, c are
-    fit (to L4). `model()` returns a plain LinearMLP, so this class sits BESIDE
+    fit (to L4). `model()` returns a plain MLP, so this class sits BESIDE
     the MLP hierarchy (a factory + bookkeeping), not inside it."""
 
     def __init__(self, K: int, *, family: str = "regular", seed: int = 0, swaps: int = 0,
@@ -108,8 +108,8 @@ class CodeAnsatz:
             self._pinv = np.linalg.pinv(self.M.T.astype(np.float64)).T.astype(np.float32)
         return self._pinv
 
-    def model(self, abc, device="cpu") -> LinearMLP:
-        """Build the LinearMLP(F, N) for scalars (a, b, c)."""
+    def model(self, abc, device="cpu") -> MLP:
+        """Build the MLP(F, N) for scalars (a, b, c)."""
         a, b, c = abc
         Mf = self.M.astype(np.float64)
         w_in = (a * Mf + b * (1.0 - Mf)).astype(np.float32)      # (F, N)
@@ -117,7 +117,7 @@ class CodeAnsatz:
             w_out = (c * w_in.T).astype(np.float32)               # (N, F) tied: decoder = c*encoder^T
         else:
             w_out = (c * self.pinv_wout()).astype(np.float32)     # (N, F) scaled pseudoinverse
-        model = LinearMLP(n_features=self.F, d_mlp=self.N, device=device)
+        model = MLP(n_features=self.F, d_mlp=self.N, device=device)
         with torch.no_grad():
             model.w_in.copy_(torch.from_numpy(w_in).to(device))
             model.w_out.copy_(torch.from_numpy(w_out).to(device))

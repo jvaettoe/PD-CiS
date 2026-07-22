@@ -59,14 +59,14 @@ def main():
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--model", default="EmbedMLP", help="model class name")
     ap.add_argument("--demb", type=int, default=200,
-                    help="embedding dim (ignored/NA for LinearMLP)")
+                    help="embedding dim (ignored/NA for MLP)")
     ap.add_argument("--d-mlp", type=int, default=50, dest="d_mlp", help="hidden width")
     ap.add_argument("--n", type=float, default=2.0, dest="n_exp", help="loss exponent")
     ap.add_argument("--methods", nargs="+", default=["APD", "SPD"],
                     choices=list(PANELS), help="methods to row-stack")
     args = ap.parse_args()
 
-    demb = None if args.model == "LinearMLP" else args.demb
+    demb = None if args.model == "MLP" else args.demb
     dmlp = args.d_mlp
     ntok = _fmt_n(args.n_exp)
 

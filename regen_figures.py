@@ -95,7 +95,7 @@ def main():
         cmd = [sys.executable, "plot_prelim.py",
                "--model", model, "--d-mlp", str(dmlp), "--n", ntok,
                "--methods", *sorted(meths)]
-        if model != "LinearMLP":
+        if model != "MLP":
             cmd += ["--demb", dtok]
         r = subprocess.run(cmd, capture_output=True, text=True)
         if r.returncode == 0:

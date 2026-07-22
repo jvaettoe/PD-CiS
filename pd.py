@@ -236,7 +236,7 @@ class PD(PDViz, nn.Module, ABC):
         losslessly capture what a 100x100 effective heatmap only implies. Taken from
         the dominant singular directions of w_in_c / w_out_c (exact at rank=1;
         dominant mode at rank>1), projected to feature space so it works for both
-        LinearMLP (identity projection) and EmbedMLP (folds w_e). Sign is fixed so
+        MLP (identity projection) and EmbedMLP (folds w_e). Sign is fixed so
         each profile's largest-magnitude entry is positive (SVD sign is arbitrary)."""
         u, v, coupling, _, _ = self._component_signature(c)
         return u, v, coupling
@@ -279,7 +279,7 @@ class PD(PDViz, nn.Module, ABC):
         Taken from the dominant singular mode of w_in_c / w_out_c but kept in HIDDEN
         space (the singular vector on the d_mlp side, scaled by its singular value),
         the exact hidden counterparts of read_write_profiles' u/v. Sign is fixed by the
-        FEATURE side, so it is meaningful and exact for LinearMLP / ExactPD:
+        FEATURE side, so it is meaningful and exact for MLP / ExactPD:
         reads_hidden[c] == w_in[c, :] and writes_hidden[c] == w_out[:, c] (row c / column
         c of the effective weights). For a raw-EmbedMLP APD fit, w_in_c lives in
         embedding space, so the sign is tied to an embedding direction rather than a
@@ -471,7 +471,7 @@ class APD(PD):
         w_in AND w_out gated per-example by gates[b, c]. gates=ones reproduces the
         dense reconstruction (== forward_dense); a per-example binary mask gives
         the batch-top-k sparse forward. Uses the model's embed_input/unembed_output
-        so it works for LinearMLP and EmbedMLP alike. Keeps the C dimension explicit
+        so it works for MLP and EmbedMLP alike. Keeps the C dimension explicit
         (per-example masks can't be folded into one weight matrix) -- this is the
         cost of faithful batch top-k."""
         P_in = self._components("w_in")                        # (C, d_in, d_mlp)
@@ -645,16 +645,16 @@ class ExactPD(APD):
     component is rank-1.
 
     Exact for BOTH architectures because the model is behaviourally a feature-space
-    LinearMLP:
+    MLP:
         model(x) == relu(x @ readin) @ readout,
     where readin = readin() (n_features, d_mlp) and readout = readout()
     (d_mlp, n_features). (For EmbedMLP the linear embedding folds outside the ReLU:
-    readin = w_e @ w_in, readout = w_out @ w_e.T; for LinearMLP they are just
+    readin = w_e @ w_in, readout = w_out @ w_e.T; for MLP they are just
     w_in/w_out.) Splitting those folded matrices by row / column sums back exactly,
     so faithfulness == 0 by construction.
 
-    Implemented by reusing ALL of APD's machinery on a feature-space LinearMLP
-    SURROGATE whose weights are readin()/readout(): a LinearMLP has identity
+    Implemented by reusing ALL of APD's machinery on a feature-space MLP
+    SURROGATE whose weights are readin()/readout(): a MLP has identity
     projection/embedding hooks, so the inherited forward, batch-top-k attributions,
     component metrics and viz all work unchanged and uniformly. The per-feature
     rank-1 A@B factors are set analytically and frozen (requires_grad=False), so the
@@ -665,14 +665,14 @@ class ExactPD(APD):
 
     def __init__(self, model: nn.Module, C: int | None = None, rank: int = 1,
                  param_names: list[str] | None = None) -> None:
-        from mlp import LinearMLP  # deferred: mlp imports pd (circular at module load)
+        from mlp import MLP  # deferred: mlp imports pd (circular at module load)
 
         n_features, d_mlp = model.n_features, model.d_mlp
         readin = model.readin().detach()    # (n_features, d_mlp)   feature-space read-in
         readout = model.readout().detach()  # (d_mlp, n_features)   feature-space read-out
 
         # Feature-space linear surrogate: relu(x @ readin) @ readout == model(x).
-        surrogate = LinearMLP(n_features=n_features, d_mlp=d_mlp, device=model.device)
+        surrogate = MLP(n_features=n_features, d_mlp=d_mlp, device=model.device)
         with torch.no_grad():
             surrogate.w_in.copy_(readin)
             surrogate.w_out.copy_(readout)

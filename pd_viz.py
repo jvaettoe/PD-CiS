@@ -233,7 +233,7 @@ class PDViz:
     def plot_component_weights(self, *, params: dict | None = None,
                                _ctx: dict | None = None):
         """The actual per-component WEIGHT vectors over the d_mlp hidden neurons,
-        stacked into (C x d_mlp) signed heatmaps (for LinearMLP these ARE
+        stacked into (C x d_mlp) signed heatmaps (for MLP these ARE
         w_in / w_out.T with rows = components = features)."""
         ctx = _ctx or self._view_context(0)
         order = ctx["order"]
@@ -257,7 +257,7 @@ class PDViz:
         fig.colorbar(im2, ax=a2, fraction=0.046, pad=0.04)
         fig.suptitle(component_title(
             f"Component weights over hidden neurons  [{C}×{d_mlp}]", params,
-            "signed; for LinearMLP these are exactly w_in / w_out.T"), fontsize=11)
+            "signed; for MLP these are exactly w_in / w_out.T"), fontsize=11)
         return fig
 
     def plot_component_weight_profiles(self, *, top: int = 16, params: dict | None = None,

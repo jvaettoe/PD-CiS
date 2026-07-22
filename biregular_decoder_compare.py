@@ -20,19 +20,19 @@ import torch
 
 import biregular_ansatz as bir
 import results_io
-from mlp import LinearMLP
+from mlp import MLP
 from overview import OVERVIEW_FIG, OVERVIEW_RES, trained_l4
 from sweep import PS
 
 N_EXP = 4.0
 
 
-def ignore_half_model(F=100, d_mlp=50, device="cpu") -> LinearMLP:
+def ignore_half_model(F=100, d_mlp=50, device="cpu") -> MLP:
     """No-superposition baseline: dedicate one neuron each to the first d_mlp features
     (monosemantic identity -> perfect relu reconstruction) and output 0 for the rest.
     w_in rows 0..d_mlp-1 = identity, others 0; w_out cols 0..d_mlp-1 = identity, others 0.
     forward -> out[j<d_mlp] = relu(x_j) = target, out[j>=d_mlp] = 0."""
-    m = LinearMLP(n_features=F, d_mlp=d_mlp, device=device)
+    m = MLP(n_features=F, d_mlp=d_mlp, device=device)
     idx = range(d_mlp)
     with torch.no_grad():
         m.w_in.zero_(); m.w_in[idx, idx] = 1.0      # feature n -> neuron n (n < d_mlp)
@@ -63,12 +63,12 @@ def main():
             gains[dec][p] = (r["ac"], r["bc"])
             print(f"[{dec:9}] p={p:6}  L4={r['L4']:.3e}  a*c={r['ac']:.3f}  b*c={r['bc']:.3f}")
 
-    # naive fully-trained LinearMLP(d_mlp=50) baseline (the free model of the same width;
+    # naive fully-trained MLP(d_mlp=50) baseline (the free model of the same width;
     # same reconstruction_loss settings as fit_eval, so directly comparable)
     rows["naive"] = {}
     for p in PS:
-        rows["naive"][p] = trained_l4("LinearMLP", None, 50, p, N_EXP, device=a.device)
-        print(f"[naive-d50] p={p:6}  L4={rows['naive'][p]:.3e}  (fully-trained LinearMLP)")
+        rows["naive"][p] = trained_l4("MLP", None, 50, p, N_EXP, device=a.device)
+        print(f"[naive-d50] p={p:6}  L4={rows['naive'][p]:.3e}  (fully-trained MLP)")
 
     # no-superposition baseline: compute 50 features perfectly, ignore (zero) the other 50
     ig = ignore_half_model(device=a.device)
@@ -84,10 +84,10 @@ def main():
     header = ["decoder"] + [f"p={p}" for p in PS]
     all_rows = ["naive", "ignore50", "pinv", "transpose"]
     lines = [f"### Biregular K{a.K} ({code_lbl}): L{ntok} reconstruction loss — "
-             f"naive LinearMLP(d_mlp=50) + no-superposition baselines vs pinv/transpose decoder",
+             f"naive MLP(d_mlp=50) + no-superposition baselines vs pinv/transpose decoder",
              "", "| " + " | ".join(header) + " |",
              "|" + "|".join(["---"] * len(header)) + "|"]
-    labels = {"naive": "naive LinearMLP d50", "ignore50": "ignore-50 (no superposition)",
+    labels = {"naive": "naive MLP d50", "ignore50": "ignore-50 (no superposition)",
               "pinv": "pinv decoder", "transpose": "transpose decoder"}
     for dec in all_rows:
         lines.append("| " + " | ".join([labels[dec]] + [f"{rows[dec][p]:.3e}" for p in PS]) + " |")
@@ -116,7 +116,7 @@ def main():
         ax.plot(xs, [rows[dec][p] for p in PS], style, color=col, label=labels[dec])
     ax.set_xscale("log"); ax.set_yscale("log")
     ax.set_xlabel("data sparsity p"); ax.set_ylabel(f"L{ntok} reconstruction loss")
-    ax.set_title(f"Biregular K{a.K} ({code_lbl}) vs naive LinearMLP(d_mlp=50)")
+    ax.set_title(f"Biregular K{a.K} ({code_lbl}) vs naive MLP(d_mlp=50)")
     ax.legend(); ax.grid(True, alpha=0.3, which="both")
     out = os.path.join(OVERVIEW_FIG, f"biregular_decoder_compare_n{ntok}_K{a.K}{swap_tok}.png")
     fig.savefig(out, dpi=140, bbox_inches="tight"); plt.close(fig)

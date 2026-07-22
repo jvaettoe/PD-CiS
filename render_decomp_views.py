@@ -41,14 +41,14 @@ PS = ["0.001", "0.01", "0.1", "0.5", "0.8"]
 
 
 def demb_arg():
-    """Embedding dim for make_run_id: None for LinearMLP (its run_ids have no d_emb),
+    """Embedding dim for make_run_id: None for MLP (its run_ids have no d_emb),
     else DEMB. Keeps this suite runnable for either architecture."""
-    return None if MODEL == "LinearMLP" else DEMB
+    return None if MODEL == "MLP" else DEMB
 
 
 def demb_tok() -> str:
-    """Filename token for the embedding dim: 'NA' for LinearMLP, else the number."""
-    return "NA" if MODEL == "LinearMLP" else str(DEMB)
+    """Filename token for the embedding dim: 'NA' for MLP, else the number."""
+    return "NA" if MODEL == "MLP" else str(DEMB)
 
 
 def components_dir() -> str:
@@ -75,7 +75,7 @@ def render_per_cell():
             cmd = [sys.executable, "plot_components.py",
                    "--model", MODEL, "--demb", str(DEMB), "--d-mlp", str(d_mlp),
                    "--p", p, "--n", results_io._fmt_n(N_EXP), "--method", METHOD]
-            # --demb is a valid int (ignored for LinearMLP: build_run_id maps it to None)
+            # --demb is a valid int (ignored for MLP: build_run_id maps it to None)
             r = subprocess.run(cmd, capture_output=True, text=True)
             if r.returncode == 0:
                 n_ok += 1
@@ -187,8 +187,8 @@ if __name__ == "__main__":
     ap.add_argument("--method", default=METHOD,
                     choices=["APD", "OracleAPD", "SPD", "ExactPD", "VPD"],
                     help="which fitted decomposition to visualise (default APD)")
-    ap.add_argument("--model", default=MODEL, choices=["EmbedMLP", "LinearMLP"],
-                    help="model class (default EmbedMLP; LinearMLP has no d_emb)")
+    ap.add_argument("--model", default=MODEL, choices=["EmbedMLP", "MLP"],
+                    help="model class (default EmbedMLP; MLP has no d_emb)")
     ap.add_argument("--demb", type=int, default=DEMB, help="embedding dim (default 200)")
     ap.add_argument("--n", type=float, default=N_EXP, dest="n_exp",
                     help="loss exponent / topical group (default 4)")

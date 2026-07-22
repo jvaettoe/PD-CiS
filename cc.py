@@ -18,7 +18,7 @@ import matplotlib.pyplot as plt
 from matplotlib.cm import ScalarMappable
 from matplotlib.colors import Normalize
 
-from mlp import MLPBase, LinearMLP, EmbedMLP
+from mlp import MLPBase, MLP, EmbedMLP
 from data import SparseDataset, CleanDataset
 from pd import APD, OracleAPD, SPD
 from results_io import _fmt_n
@@ -58,7 +58,7 @@ def train(model: MLPBase, dataset: SparseDataset, n: float = 2, batch_size: int 
 
 CKPT_DIR = os.path.join(os.path.dirname(__file__), "checkpoints")
 _DATASET_REGISTRY = {"CleanDataset": CleanDataset, "SparseDataset": SparseDataset}
-_MODEL_REGISTRY = {"LinearMLP": LinearMLP, "EmbedMLP": EmbedMLP}
+_MODEL_REGISTRY = {"MLP": MLP, "EmbedMLP": EmbedMLP}
 
 
 def compute_n_steps(p: float, n_features: int, base_steps: int = 10_000) -> int:
@@ -84,7 +84,7 @@ def checkpoint_path(str_p: str, model_cls: type, model_kwargs: dict,
     Keyed by the *string* p (reuses the exact tokens in str_train_ps and avoids
     0.001-vs-1e-3 float ambiguity); model class name + sorted kwargs + loss
     exponent + seed make any architecture/exponent/seed change yield a distinct
-    artifact instead of silently reloading a stale one, and stop LinearMLP/
+    artifact instead of silently reloading a stale one, and stop MLP/
     EmbedMLP with matching n_features/d_mlp from colliding."""
     fname = (f"ncc_{model_cls.__name__}_{_kwargs_key(model_kwargs)}"
              f"_p{str_p}_n{_fmt_n(n_exp)}_s{seed}.pt")
@@ -98,7 +98,7 @@ def save_checkpoint(path: str, model: MLPBase, dataset: SparseDataset,
     """Persist everything needed to reconstruct model AND dataset deterministically.
     device is deliberately not saved (machine-dependent; chosen at load time).
     Model is stored generically via its class name + config() so any MLPBase subclass
-    (LinearMLP, EmbedMLP, ...) round-trips."""
+    (MLP, EmbedMLP, ...) round-trips."""
     os.makedirs(os.path.dirname(path), exist_ok=True)
     payload = {
         "format_version": 2,
@@ -141,7 +141,7 @@ def load_checkpoint(path: str, device: str | None = None) -> dict:
             "losses": payload["losses"], "meta": payload}
 
 
-def load_or_train(str_p: str, model_cls: type = LinearMLP,
+def load_or_train(str_p: str, model_cls: type = MLP,
                   model_kwargs: dict | None = None, *,
                   seed: int = 42, dataset_seed: int | None = None,
                   exactly_one_active_feature: bool = False,
@@ -151,7 +151,7 @@ def load_or_train(str_p: str, model_cls: type = LinearMLP,
                   n_exp: float = 2.0) -> dict:
     """Loads a matching checkpoint if one exists, otherwise trains from scratch and
     saves it. Generic over MLPBase subclass: the caller specializes by passing model_cls
-    and model_kwargs, e.g. load_or_train("0.1", LinearMLP, {"n_features":50,"d_mlp":50})
+    and model_kwargs, e.g. load_or_train("0.1", MLP, {"n_features":50,"d_mlp":50})
     or load_or_train("0.1", EmbedMLP, {"n_features":50,"d_emb":16,"d_mlp":50}). The
     dataset shares n_features with the model (read from model_kwargs). n_exp is the
     training-loss exponent (loss = |out - labels|**n_exp); it is part of the
@@ -182,7 +182,7 @@ def load_or_train(str_p: str, model_cls: type = LinearMLP,
 # --------------------------------------------------------------------------
 # Demo: the generic train/save/reload path specialised to each MLPBase subclass.
 # The checkpoint machinery is architecture-agnostic (model.config() + registry);
-# here "main" picks LinearMLP and EmbedMLP concretely and renders the
+# here "main" picks MLP and EmbedMLP concretely and renders the
 # feature-space weight-space plots (projected through readin()/readout() for
 # EmbedMLP).  Run:  ./.venv/bin/python cc.py
 # --------------------------------------------------------------------------
@@ -196,7 +196,7 @@ if __name__ == "__main__":
 
     str_p = "0.05"
     specs = [
-        (LinearMLP, {"n_features": 20, "d_mlp": 20}),
+        (MLP, {"n_features": 20, "d_mlp": 20}),
         (EmbedMLP, {"n_features": 20, "d_emb": 8, "d_mlp": 20}),
     ]
 

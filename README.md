@@ -10,7 +10,7 @@ and **ExactPD** (the analytic, per-feature ground truth). A second line of work 
 | File | Role |
 |---|---|
 | `pd.py` | PD base class + `APD` / `OracleAPD` / `SPD` / `ExactPD`; per-component metrics & rank-1 signatures |
-| `mlp.py` | `LinearMLP` / `EmbedMLP` models; weight, effective-map, input–output plots |
+| `mlp.py` | `MLP` / `EmbedMLP` models; weight, effective-map, input–output plots |
 | `data.py` | `CleanDataset` — sparse Bernoulli–uniform features, target `relu(x)` |
 | `cc.py` | Train an MLP + checkpoint cache (`load_or_train`, save/load) |
 | `decomp_fit.py` | Optimiser loop that fits a decomposition; `build_pd`, save/load a decomposition |

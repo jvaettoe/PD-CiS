@@ -8,7 +8,7 @@ Two aggregate views that distil the per-cell figures + cached data:
       dim and sparsity.  -> figures/overview/exactpd_effective_count_n<n>.png
 
   (b) Readable model reconstruction-loss tables: L_n = mean(|model(x) - relu(x)|^n) on a
-      held-out batch at each p, for LinearMLP, every EmbedMLP d_emb, and the biregular K
+      held-out batch at each p, for MLP, every EmbedMLP d_emb, and the biregular K
       code (refit per p) -- one table per hidden width, as markdown (printed + saved) + CSV.
       -> results/overview/model_L<n>_n<n>_dmlp<w>.{md,csv}
 
@@ -27,7 +27,7 @@ import cc
 import decomp_fit
 import results_io
 import biregular_ansatz as bir
-from mlp import LinearMLP, EmbedMLP
+from mlp import MLP, EmbedMLP
 from sweep import N_FEATURES, D_EMBS, PS, D_MLP   # track the sweep grid
 
 D_MLPS = [50, 100]
@@ -44,8 +44,8 @@ OVERVIEW_RES = os.path.join(os.path.dirname(__file__), "results", "overview")
 
 def _load_trained(model_name, d_emb, d_mlp, str_p, n_exp, device="cpu"):
     """Load the cached n_exp checkpoint for (model, d_emb, d_mlp, p), or None."""
-    if model_name == "LinearMLP":
-        cls, kwargs = LinearMLP, {"n_features": N_FEATURES, "d_mlp": d_mlp}
+    if model_name == "MLP":
+        cls, kwargs = MLP, {"n_features": N_FEATURES, "d_mlp": d_mlp}
     else:
         cls, kwargs = EmbedMLP, {"n_features": N_FEATURES, "d_emb": d_emb, "d_mlp": d_mlp}
     path = cc.checkpoint_path(str_p, cls, kwargs, seed=42, n_exp=n_exp)
@@ -76,7 +76,7 @@ def _ansatz(K, swaps, seed=0) -> "bir.CodeAnsatz":
 def build_loss_table(n_exp, d_mlp, device="cpu", include_biregular=True):
     """DataFrame: rows = models, cols = p, cells = L_n reconstruction loss."""
     rows = {}
-    rows["LinearMLP"] = {p: trained_l4("LinearMLP", None, d_mlp, p, n_exp, device) for p in PS}
+    rows["MLP"] = {p: trained_l4("MLP", None, d_mlp, p, n_exp, device) for p in PS}
     for demb in sorted(D_EMBS):
         rows[f"EmbedMLP d_emb={demb}"] = {
             p: trained_l4("EmbedMLP", demb, d_mlp, p, n_exp, device) for p in PS}
@@ -122,7 +122,7 @@ def write_loss_tables(n_exp, device="cpu"):
 
 def _demb_label(v):
     s = str(v)
-    return "LinearMLP" if s in ("", "nan", "None", "NA") else str(int(float(v)))
+    return "MLP" if s in ("", "nan", "None", "NA") else str(int(float(v)))
 
 
 def effective_count_heatmap(n_exp, device="cpu"):
@@ -133,7 +133,7 @@ def effective_count_heatmap(n_exp, device="cpu"):
     cm = pd.read_csv(path)
     cm = cm[(cm["method"] == "ExactPD") & (cm["n_exp"].astype(float) == float(n_exp))].copy()
     cm["demb"] = cm["d_emb"].map(_demb_label)
-    row_order = [r for r in ["LinearMLP", "20", "50", "100", "200", "1000"]
+    row_order = [r for r in ["MLP", "20", "50", "100", "200", "1000"]
                  if r in set(cm["demb"])]
 
     os.makedirs(OVERVIEW_FIG, exist_ok=True)
@@ -154,7 +154,7 @@ def effective_count_heatmap(n_exp, device="cpu"):
                     ax.text(j, i, f"{A[i, j]:.0f}", ha="center", va="center",
                             color="w" if A[i, j] < 0.6 * N_FEATURES else "k", fontsize=8)
         fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
-    axes[0][0].set_ylabel("model (d_emb; LinearMLP = no embedding)")
+    axes[0][0].set_ylabel("model (d_emb; MLP = no embedding)")
     fig.suptitle(f"ExactPD effective_count  (# features the trained model computes, of {N_FEATURES})"
                  f"  — n={results_io._fmt_n(n_exp)}", fontsize=12)
     out = os.path.join(OVERVIEW_FIG, f"exactpd_effective_count_n{results_io._fmt_n(n_exp)}.png")
@@ -174,7 +174,7 @@ def behavioural_count_heatmap(n_exp, device="cpu"):
     for the agreement scatter."""
     os.makedirs(OVERVIEW_FIG, exist_ok=True)
     ntok = results_io._fmt_n(n_exp)
-    row_specs = [("LinearMLP", "LinearMLP", None)] + \
+    row_specs = [("MLP", "MLP", None)] + \
                 [(str(d), "EmbedMLP", d) for d in sorted(D_EMBS)]
     behav = {}
     fig, axes = plt.subplots(1, len(D_MLPS), figsize=(5.5 * len(D_MLPS), 4.6),
@@ -199,7 +199,7 @@ def behavioural_count_heatmap(n_exp, device="cpu"):
                     ax.text(j, i, f"{A[i, j]:.0f}", ha="center", va="center",
                             color="w" if A[i, j] < 0.6 * N_FEATURES else "k", fontsize=8)
         fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
-    axes[0][0].set_ylabel("model (d_emb; LinearMLP = no embedding)")
+    axes[0][0].set_ylabel("model (d_emb; MLP = no embedding)")
     fig.suptitle(f"Behavioural feature count  n_soft = Σ max(0, R²_i)  "
                  f"(active-conditional, at each model's training p; of {N_FEATURES})"
                  f"  — n={ntok}", fontsize=12)
@@ -222,7 +222,7 @@ def behavioural_ceiling_heatmap(n_exp, behav, device="cpu"):
     works in isolation)."""
     os.makedirs(OVERVIEW_FIG, exist_ok=True)
     ntok = results_io._fmt_n(n_exp)
-    row_specs = [("LinearMLP", "LinearMLP", None)] + \
+    row_specs = [("MLP", "MLP", None)] + \
                 [(str(d), "EmbedMLP", d) for d in sorted(D_EMBS)]
     fig, axes = plt.subplots(2, len(D_MLPS), figsize=(5.5 * len(D_MLPS), 9.0),
                              squeeze=False, constrained_layout=True)
@@ -260,8 +260,8 @@ def behavioural_ceiling_heatmap(n_exp, behav, device="cpu"):
                         ax.text(j, i, f"{A[i, j]:.0f}", ha="center", va="center",
                                 color="w" if dark else "k", fontsize=8)
             fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
-    axes[0][0].set_ylabel("model (d_emb; LinearMLP = no embedding)")
-    axes[1][0].set_ylabel("model (d_emb; LinearMLP = no embedding)")
+    axes[0][0].set_ylabel("model (d_emb; MLP = no embedding)")
+    axes[1][0].set_ylabel("model (d_emb; MLP = no embedding)")
     fig.suptitle(f"Interference-free ceiling vs in-distribution behavioural count — n={ntok}\n"
                  f"top: what each trained model computes in isolation;  bottom: iso − in-dist "
                  f"(+ = lost to interference, − = calibrated to dense operating point)",
@@ -282,7 +282,7 @@ def calibration_curves(n_exp, device="cpu"):
     os.makedirs(OVERVIEW_FIG, exist_ok=True)
     ntok = results_io._fmt_n(n_exp)
     P_EVAL = [0.001, 0.003, 0.01, 0.03, 0.1, 0.2, 0.35, 0.5, 0.65, 0.8, 0.9]
-    panels = [("LinearMLP d_mlp=50 (calibration case)", "LinearMLP", None, 50),
+    panels = [("MLP d_mlp=50 (calibration case)", "MLP", None, 50),
               ("EmbedMLP d_emb=20 d_mlp=50 (representational contrast)", "EmbedMLP", 20, 50)]
     cmap = plt.get_cmap("viridis")
 
@@ -349,9 +349,9 @@ def count_agreement_scatter(n_exp, behav, device="cpu", include_biregular=True):
         y = exact.get((label, d_mlp, pf))
         if y is None:
             continue
-        marker = "s" if label == "LinearMLP" else "o"
+        marker = "s" if label == "MLP" else "o"
         scat(x, y, d_mlp, marker, (marker, d_mlp),
-             f"{'LinearMLP' if marker == 's' else 'EmbedMLP'} d_mlp={d_mlp}")
+             f"{'MLP' if marker == 's' else 'EmbedMLP'} d_mlp={d_mlp}")
         if abs(x - y) > 20:
             divergent.append((abs(x - y), x, y, label, d_mlp, pf))
 
@@ -365,7 +365,7 @@ def count_agreement_scatter(n_exp, behav, device="cpu", include_biregular=True):
             best[key] = (d, x, y, label, d_mlp, pf)
     for rank, (d, x, y, label, d_mlp, pf) in enumerate(sorted(best.values(), key=lambda t: t[1])):
         off = (4, 5) if rank % 2 == 0 else (4, -11)
-        name = "LinearMLP" if label == "LinearMLP" else f"d_emb={label}"
+        name = "MLP" if label == "MLP" else f"d_emb={label}"
         ax.annotate(f"{name} p={pf:g}", (x, y), fontsize=7,
                     xytext=off, textcoords="offset points")
 
@@ -495,7 +495,7 @@ def _vpd_counts(n_exp, device="cpu"):
         run_id = os.path.basename(path)[:-3]
         info = results_io.parse_run_id(run_id)
         pd_obj = decomp_fit.load_decomposition(run_id, device=device)
-        label = "LinearMLP" if info["d_emb"] is None else str(info["d_emb"])
+        label = "MLP" if info["d_emb"] is None else str(info["d_emb"])
         out[(label, info["d_mlp"], float(info["p"]))] = pd_obj.ci_stats(float(info["p"]))["headline"]
     return out
 
@@ -512,7 +512,7 @@ def vpd_comparison(n_exp, behav, device="cpu"):
     ntok = results_io._fmt_n(n_exp)
     os.makedirs(OVERVIEW_FIG, exist_ok=True)
     d_mlps = sorted({d for (_, d, _) in vpd})
-    row_order = [r for r in ["LinearMLP", "20", "50", "100", "200", "1000"]
+    row_order = [r for r in ["MLP", "20", "50", "100", "200", "1000"]
                  if any(lbl == r for (lbl, _, _) in vpd)]
 
     # heatmap: n_alive_union (big) with PR(mean-ci) small
@@ -538,7 +538,7 @@ def vpd_comparison(n_exp, behav, device="cpu"):
                             va="center", fontsize=7,
                             color="w" if A[i, j] < 0.6 * N_FEATURES else "k")
         fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
-    axes[0][0].set_ylabel("model (d_emb; LinearMLP = no embedding)")
+    axes[0][0].set_ylabel("model (d_emb; MLP = no embedding)")
     fig.suptitle(f"VPD component count — n_alive_union (PR of mean-CI)  "
                  f"[ci > {0.1} on a fresh batch at the cell's p; of {N_FEATURES}] — n={ntok}",
                  fontsize=11)
@@ -556,7 +556,7 @@ def vpd_comparison(n_exp, behav, device="cpu"):
             x = ref.get((lbl, d_mlp, pf))
             if x is None:
                 continue
-            marker = "s" if lbl == "LinearMLP" else "o"
+            marker = "s" if lbl == "MLP" else "o"
             ax.scatter([x], [st["n_alive_union"]], marker=marker, s=45, alpha=0.85,
                        color="tab:green")
             ax.scatter([x], [st["pr_mean_ci"]], marker=marker, s=30, alpha=0.5,
@@ -589,7 +589,7 @@ def vpd_behavioural_nsoft(n_exp, behav, device="cpu"):
         run_id = os.path.basename(path)[:-3]
         info = results_io.parse_run_id(run_id)
         pd_obj = decomp_fit.load_decomposition(run_id, device=device)
-        label = "LinearMLP" if info["d_emb"] is None else str(info["d_emb"])
+        label = "MLP" if info["d_emb"] is None else str(info["d_emb"])
         r2 = pd_obj.per_feature_r2(float(info["p"]))
         vpd_ns[(label, info["d_mlp"], float(info["p"]))] = float(r2.clamp(min=0).sum())
     if not vpd_ns:
@@ -597,7 +597,7 @@ def vpd_behavioural_nsoft(n_exp, behav, device="cpu"):
         return
     os.makedirs(OVERVIEW_FIG, exist_ok=True)
     d_mlps = sorted({d for (_, d, _) in vpd_ns})
-    row_order = [r for r in ["LinearMLP", "20", "50", "100", "200", "1000"]
+    row_order = [r for r in ["MLP", "20", "50", "100", "200", "1000"]
                  if any(lbl == r for (lbl, _, _) in vpd_ns)]
     fig, axes = plt.subplots(2, len(d_mlps), figsize=(5.5 * len(d_mlps), 9.0),
                              squeeze=False, constrained_layout=True)
@@ -629,7 +629,7 @@ def vpd_behavioural_nsoft(n_exp, behav, device="cpu"):
                         ax.text(j, i, f"{A[i, j]:.0f}", ha="center", va="center",
                                 color="w" if dark else "k", fontsize=8)
             fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
-        axes[0][col].set_ylabel("model (d_emb; LinearMLP = no embedding)")
+        axes[0][col].set_ylabel("model (d_emb; MLP = no embedding)")
     fig.suptitle(f"VPD's behavioural feature count (component reconstruction, delta excluded) — "
                  f"top: n_soft = Σ max(0, R²);  bottom: shortfall vs model = delta-carried "
                  f"capacity — n={ntok}", fontsize=11)

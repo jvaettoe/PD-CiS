@@ -47,7 +47,7 @@ class MLPBase(nn.Module, ABC):
 
     # Feature-space projection hooks. The effective read-in/read-out weights that map
     # the n_features input/output space through the hidden layer. Base defaults are
-    # correct whenever d_in == d_out == n_features (LinearMLP); EmbedMLP overrides them
+    # correct whenever d_in == d_out == n_features (MLP); EmbedMLP overrides them
     # to fold in its embedding w_e so the weight-space plots stay in feature space.
     def readin(self) -> Float[Tensor, "n_features d_mlp"]:
         return self.project_in(self.w_in)
@@ -57,7 +57,7 @@ class MLPBase(nn.Module, ABC):
 
     # Weight-space projection of an arbitrary read-in / read-out matrix into
     # feature space (the matrix analog of embed_input/unembed_output, and what
-    # readin/readout are built on). Identity for LinearMLP; EmbedMLP folds in
+    # readin/readout are built on). Identity for MLP; EmbedMLP folds in
     # w_e. Lets a decomposition's per-component weights be viewed in feature
     # space the same way the model's own weights are.
     def project_in(self, W_in: Float[Tensor, "d_in d_mlp"]) -> Float[Tensor, "n_features d_mlp"]:
@@ -68,7 +68,7 @@ class MLPBase(nn.Module, ABC):
 
     # Decomposition hooks. The transforms applied *around* the decomposed params
     # (w_in, w_out): what actually feeds w_in, and how w_out's output maps back to
-    # feature space. Identity for LinearMLP; EmbedMLP folds in its embedding w_e.
+    # feature space. Identity for MLP; EmbedMLP folds in its embedding w_e.
     # APD's per-component (batch-top-k) forward uses these to stay model-agnostic.
     def embed_input(self, x: Float[Tensor, "batch n_features"]) -> Float[Tensor, "batch d_in"]:
         return x
@@ -118,7 +118,7 @@ class MLPBase(nn.Module, ABC):
                             batch: int = 16384, seed: int = 12345) -> float:
         """L_n reconstruction loss mean(|self(x) - relu(x)|**n_exp) on a fresh
         held-out CleanDataset batch at sparsity p (the model's own task loss;
-        directly comparable across LinearMLP / EmbedMLP / designed-code models)."""
+        directly comparable across MLP / EmbedMLP / designed-code models)."""
         ds = CleanDataset(n_features=self.n_features, p=float(p),
                           device=self.device, seed=seed)
         x, y = ds.generate_batch(batch)
@@ -238,7 +238,7 @@ class MLPBase(nn.Module, ABC):
         return ax
 
 
-class LinearMLP(MLPBase):
+class MLP(MLPBase):
     """simple single-layer MLP module, no biases."""
  
     def __init__(self, n_features: int, d_mlp: int, device: str | None = None):

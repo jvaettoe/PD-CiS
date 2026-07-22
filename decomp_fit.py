@@ -54,7 +54,7 @@ APD_RANK = 1
 ALPHA_SIMPLICITY = 1.0
 
 # For SPD, which target params get decomposed and how they are applied. Both
-# LinearMLP and EmbedMLP route w_in/w_out through decomp_op as plain matmuls
+# MLP and EmbedMLP route w_in/w_out through decomp_op as plain matmuls
 # (EmbedMLP's embedding w_e is applied outside the pd path, so it is not
 # decomposed).
 SPD_PARAM_SPECS = {"w_in": "matmul", "w_out": "matmul"}

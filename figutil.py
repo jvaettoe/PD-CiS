@@ -191,11 +191,11 @@ def plot_losses_vs_p(summary, *, method: str, n_exp: float, model: str = "EmbedM
     terms = terms or ["faithful", "minimal", "simple", "total"]
     target_n = _fmt_n(float(n_exp))
 
-    # d_emb match that survives pandas dtype coercion. Once any LinearMLP row (blank
+    # d_emb match that survives pandas dtype coercion. Once any MLP row (blank
     # d_emb) lands in summary.csv the whole column becomes float, so EmbedMLP's 200
     # stringifies as '200.0' -- an exact string compare then silently matches nothing.
-    # Mirror plot_sweep_summary: treat blank/NA/nan/None as the no-d_emb (LinearMLP)
-    # bucket, else compare numerically. d_emb=None selects the LinearMLP bucket.
+    # Mirror plot_sweep_summary: treat blank/NA/nan/None as the no-d_emb (MLP)
+    # bucket, else compare numerically. d_emb=None selects the MLP bucket.
     def _demb_match(r):
         d = str(r.get("d_emb"))
         has = d not in ("", "NA", "nan", "None")

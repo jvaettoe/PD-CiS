@@ -18,7 +18,7 @@ from pd import APD
 
 
 def build_run_id(a) -> str:
-    demb = None if a.model == "LinearMLP" else a.demb
+    demb = None if a.model == "MLP" else a.demb
     return results_io.make_run_id(model=a.model, d_emb=demb, d_mlp=a.d_mlp, p=a.p,
                                   n_exp=a.n_exp, method=a.method)
 
