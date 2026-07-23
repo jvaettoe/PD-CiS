@@ -1,39 +1,33 @@
-"""Four-matrix component-recovery comparison of a learned PD against ExactPD.
+"""Component-recovery comparison of a learned PD against ExactPD.
 
-"Learned component k == ExactPD component j" means four different things, and under
-interference they can come apart; each matrix answers one notion of sameness, and the
-DISAGREEMENT pattern between them is the finding (e.g. a leak-aligned w_out basis reads
-as: mass_in diagonal, ci diagonal, w_out mass off-diagonal):
+MATCHING IS FUNCTIONAL (self-activation overlap), basis description is separate.
+"Learned component k == ExactPD component j" is decided by whether shard k CARRIES
+feature j's signal, not by whether its weights sit in ExactPD's basis: a leak-aligned
+write component (write vector = feature j's whole output spectrum) has its Frobenius
+mass spread over many columns and scores at CHANCE on weight-mass overlap while being
+exactly feature j's write mechanism. So:
 
-  1. mass_in / mass_out   -- weight space: fraction of learned component k's Frobenius
-                             mass in feature j's ExactPD support (row j of readin /
-                             column j of readout). Exact (ExactPD supports are disjoint),
-                             rows sum to 1. Reported PER MATRIX -- the w_in side is
-                             expected to recover, the w_out side is where interference
-                             forces a basis choice.
-  2. ci_in / ci_out       -- functional (firing): Pearson correlation of the VPD CI mask
-                             value for component k with feature j's activity on a sparse
-                             batch. VPD-only (needs a CI function).
-  3. fingerprint          -- behavioural: cosine between flattened one-hot response
-                             matrices of the matched MECHANISM PAIR and each ExactPD
-                             component. Signed.
-  4. ablation             -- causal: rise in feature j's active-conditional error when
-                             feature j's matched mechanism pair is ablated.
+  act_in / act_out       -- THE MATCHING CRITERION. act_in[k,j] = normalized output at
+                            j on probe e_j with w_in = component k only and w_out = the
+                            TARGET weight (and vice versa for act_out). ~1 <=> shard k
+                            alone carries feature j's signal on that side, in ANY basis.
+                            Hungarian per side (VPD indexes components independently
+                            per matrix; index k is unrelated across w_in/w_out).
+  mass_in / mass_out      -- basis description: fraction of the shard's weight mass in
+                            ExactPD's support (row j / column j). Purity reported UNDER
+                            the activation match: act high + mass high = ExactPD basis;
+                            act high + mass low = same mechanism, rotated basis (e.g.
+                            leak-aligned); act low = genuinely distributed.
+  ci_in / ci_out          -- functional (firing): VPD CI vs feature activity correlation.
+  fingerprint / ablation  -- behavioural / causal probes of the matched mechanism PAIR
+                            {w_in: match_in[j], w_out: match_out[j]}.
+  leak_align              -- for the matched write shard: cosine of its off-target write
+                            profile on e_j against the full model's leak spectrum
+                            R[j, != j] -- distinguishes leak-aligned from ExactPD-basis
+                            writes when act_out is high.
 
-PER-MATRIX COMPONENT INDEXING. VPD (like Goodfire's per-module design) indexes
-components independently per weight matrix: separate CI nets and separate [B, C] masks
-for w_in and w_out -- NOTHING aligns index k across the two matrices. So matching is
-Hungarian PER SIDE (match_in from mass_in, match_out from mass_out), and every
-functional probe uses the matched PAIR for feature j:
-    mask = {w_in: onehot(match_in[j]), w_out: onehot(match_out[j])}.
-Applying one shared index to both matrices (the naive thing) pairs a read-shard with an
-unrelated write-shard and reads as zero output even under perfect per-side recovery.
-For shared-index methods (ExactPD / APD / SPD) match_in == match_out and everything
-reduces to the naive comparison; `index_agreement` reports how aligned the two sides'
-indexings happen to be.
-
-Prototype / validation CLI (uses saved decomps of the TRAINED models; the biregular
-driver is biregular_vpd_compare.py):
+Prototype / validation CLI (saved decomps of the TRAINED models; biregular driver is
+biregular_vpd_compare.py):
 
   ./.venv/bin/python component_match.py --run-id MLP_dembNA_dmlp50_p0.1_n4_VPD
   ./.venv/bin/python component_match.py --self-test          # ExactPD vs itself -> identity
@@ -48,33 +42,57 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 from scipy.optimize import linear_sum_assignment
+from torch.func import functional_call
 
 from data import CleanDataset
 from pd import PD, ExactPD
 
 FIG_DIR = os.path.join(os.path.dirname(__file__), "figures", "comparison")
 RES_DIR = os.path.join(os.path.dirname(__file__), "results", "overview")
-THETA_MASS = 0.5     # coverage threshold on mass fractions (in [0, 1])
+THETA = 0.5          # coverage threshold (act values are s_j-normalized; mass in [0,1])
 SPLIT_MASS = 0.25    # a feature is "split" if >1 components carry this much of it
 
 
 # ---------------------------------------------------------------- matrices
 
+def activation_matrices(pd_m: PD) -> dict[str, np.ndarray]:
+    """{'act_in', 'act_out'}: (C, F) normalized self-activations -- THE matching
+    criterion. act_in[k, j] = output_j(e_j; w_in = component k only, w_out = TARGET
+    weight) / s_j, and symmetrically for act_out. The un-tested side uses the target
+    weight itself (not the component sum), isolating the tested shard from the
+    delta/reconstruction error. s_j = the model's own self-response diag (== ExactPD's
+    s_j by on-target agreement)."""
+    model = pd_m.model
+    F = model.n_features
+    X = torch.eye(F, device=model.device)
+    rows_in, rows_out = [], []
+    with torch.no_grad():
+        s = model(X).diagonal().clone()
+        s = torch.where(s.abs() > 1e-9, s, torch.ones_like(s))
+        for k in range(pd_m.C):
+            oh = torch.zeros(pd_m.C, device=model.device)
+            oh[k] = 1.0
+            p_in = {"w_in": pd_m.masked_weight("w_in", oh), "w_out": pd_m.targets["w_out"]}
+            rows_in.append((functional_call(model, p_in, (X,)).diagonal() / s).cpu().numpy())
+            p_out = {"w_in": pd_m.targets["w_in"], "w_out": pd_m.masked_weight("w_out", oh)}
+            rows_out.append((functional_call(model, p_out, (X,)).diagonal() / s).cpu().numpy())
+    return {"act_in": np.stack(rows_in), "act_out": np.stack(rows_out)}
+
+
 def mass_matrices(pd_m: PD) -> dict[str, np.ndarray]:
     """{'mass_in', 'mass_out'}: (C, F) fraction of component k's Frobenius mass in
-    feature j's ExactPD support -- row j of the feature-space read-in for w_in,
-    column j of the feature-space read-out for w_out. Rows sum to 1 (0 for dead
-    components). Projected through the model's embedding so it is exact for MLP
-    and meaningful for EmbedMLP."""
+    feature j's ExactPD support (row j of the feature-space read-in / column j of the
+    read-out). Rows sum to 1 (0 for dead components). BASIS description only -- a
+    leak-aligned mechanism scores at chance here while act_out scores ~1."""
     model = pd_m.model
     m_in, m_out = [], []
     with torch.no_grad():
         for k in range(pd_m.C):
             w_in_k, w_out_k = pd_m.component_matrices(k)
-            rin = model.project_in(w_in_k)              # (F, d_mlp)
-            rout = model.project_out(w_out_k)           # (d_mlp, F)
-            row_mass = rin.pow(2).sum(1)                # (F,)
-            col_mass = rout.pow(2).sum(0)               # (F,)
+            rin = model.project_in(w_in_k)
+            rout = model.project_out(w_out_k)
+            row_mass = rin.pow(2).sum(1)
+            col_mass = rout.pow(2).sum(0)
             m_in.append((row_mass / row_mass.sum().clamp_min(1e-12)).cpu().numpy())
             m_out.append((col_mass / col_mass.sum().clamp_min(1e-12)).cpu().numpy())
     return {"mass_in": np.stack(m_in), "mass_out": np.stack(m_out)}
@@ -95,21 +113,20 @@ def ci_coactivation(pd_v: PD, p: float, batch: int = 4096, seed: int = 0) -> dic
         h = torch.relu(e @ pd_v.targets["w_in"])
         lower, _ = pd_v._ci(e, h)
         act = (x > 0).float()
-        za = (act - act.mean(0)) / act.std(0).clamp_min(1e-12)      # (B, F)
+        za = (act - act.mean(0)) / act.std(0).clamp_min(1e-12)
         out = {}
         for name, tag in (("w_in", "ci_in"), ("w_out", "ci_out")):
             ci = lower[name]
-            zc = (ci - ci.mean(0)) / ci.std(0).clamp_min(1e-12)     # (B, C)
-            corr = zc.T @ za / x.shape[0]                           # (C, F)
-            dead = ci.std(0) < 1e-8                                 # constant CI -> corr 0
-            corr[dead] = 0.0
+            zc = (ci - ci.mean(0)) / ci.std(0).clamp_min(1e-12)
+            corr = zc.T @ za / x.shape[0]
+            corr[ci.std(0) < 1e-8] = 0.0
             out[tag] = corr.cpu().numpy()
     return out
 
 
 def _pair_mask(pd_m: PD, k_in: int, k_out: int) -> dict[str, torch.Tensor]:
     """Batch-shared masks selecting w_in component k_in and w_out component k_out --
-    the mechanism PAIR (per-matrix indexing; see module docstring)."""
+    the mechanism PAIR (per-matrix indexing)."""
     dev = pd_m.model.device
     m_in = torch.zeros(pd_m.C, device=dev); m_in[k_in] = 1.0
     m_out = torch.zeros(pd_m.C, device=dev); m_out[k_out] = 1.0
@@ -163,8 +180,7 @@ def paired_ablation_matrix(pd_m: PD, p: float, match_in: dict, match_out: dict,
 
 def solo_responses(pd_m: PD, pd_e: PD, match_in: dict, match_out: dict) -> dict:
     """Per-feature self-activation of the matched mechanism pair on e_j, alongside
-    ExactPD's own s_j: {'solo': (F,), 'exact': (F,)}. solo/exact ~ 1 everywhere means
-    the paired components carry the on-target computation."""
+    ExactPD's own s_j: {'solo': (F,), 'exact': (F,)}."""
     F = pd_m.model.n_features
     X = torch.eye(F, device=pd_m.model.device)
     solo, exact = [], []
@@ -178,41 +194,79 @@ def solo_responses(pd_m: PD, pd_e: PD, match_in: dict, match_out: dict) -> dict:
     return {"solo": np.array(solo), "exact": np.array(exact)}
 
 
+def leak_alignment(pd_m: PD, match_out: dict) -> np.ndarray:
+    """(F,) cosine between the matched write shard's off-target profile on e_j
+    (w_in = target, w_out = shard match_out[j] only) and the full model's leak
+    spectrum R[j, != j]. High values with LOW mass_out purity = the shard is feature
+    j's write mechanism in the leak-aligned basis rather than ExactPD's column basis."""
+    model = pd_m.model
+    F = model.n_features
+    X = torch.eye(F, device=model.device)
+    out = []
+    with torch.no_grad():
+        R = model(X)
+        for j in range(F):
+            oh = torch.zeros(pd_m.C, device=model.device); oh[match_out[j]] = 1.0
+            params = {"w_in": pd_m.targets["w_in"], "w_out": pd_m.masked_weight("w_out", oh)}
+            v = functional_call(model, params, (X[j:j + 1],))[0]
+            mask = torch.ones(F, dtype=torch.bool, device=model.device); mask[j] = False
+            a, b = v[mask], R[j][mask]
+            out.append(float((a @ b) / (a.norm() * b.norm()).clamp_min(1e-12)))
+    return np.array(out)
+
+
 # ---------------------------------------------------------------- matching / scores
 
 def hungarian_match(S: np.ndarray) -> dict[int, int]:
-    """Optimal one-to-one assignment maximising total score: {feature j -> comp k}.
-    Handles rectangular S (C, F)."""
+    """Optimal one-to-one assignment maximising total score: {feature j -> comp k}."""
     rows, cols = linear_sum_assignment(-S)
     return {int(j): int(k) for k, j in zip(rows, cols)}
 
 
-def score_side(M: np.ndarray, match: dict, F: int) -> dict:
-    """Purity/coverage/split/entropy of one mass matrix under its OWN side's match."""
-    matched = np.array([M[match[j], j] for j in range(F)])
-    row_tot = M.sum(1)
-    alive = row_tot > 1e-9
-    P = M[alive] / row_tot[alive, None]
-    ent = -(P * np.log(np.maximum(P, 1e-12))).sum(1)
-    return {"purity": float(matched.mean()),
-            "coverage": int((matched > THETA_MASS).sum()),
+def _matched_vals(M: np.ndarray, match: dict, F: int) -> np.ndarray:
+    return np.array([M[match[j], j] for j in range(F)])
+
+
+def score_sides(mats: dict, match_in: dict, match_out: dict, F: int) -> dict:
+    """Per side: act purity/coverage under the ACTIVATION match, mass purity under the
+    SAME match (basis question), agreement with the mass-based match, mass row entropy."""
+    scores = {}
+    for side, match, act_key, mass_key in (("in", match_in, "act_in", "mass_in"),
+                                           ("out", match_out, "act_out", "mass_out")):
+        act_v = _matched_vals(mats[act_key], match, F)
+        mass_v = _matched_vals(mats[mass_key], match, F)
+        mass_match = hungarian_match(mats[mass_key])
+        M = mats[mass_key]
+        row_tot = M.sum(1)
+        alive = row_tot > 1e-9
+        P = M[alive] / row_tot[alive, None]
+        ent = -(P * np.log(np.maximum(P, 1e-12))).sum(1)
+        scores[side] = {
+            "act_purity": float(act_v.mean()),
+            "act_coverage": int((act_v > THETA).sum()),
+            "mass_purity": float(mass_v.mean()),
+            "match_agree": float(np.mean([match[j] == mass_match[j] for j in range(F)])),
+            "row_entropy": float(ent.mean()) if alive.any() else float("nan"),
             "split": int(((M > SPLIT_MASS).sum(0) > 1).sum()),
-            "row_entropy": float(ent.mean()) if alive.any() else float("nan")}
+        }
+    scores["index_agreement"] = float(np.mean([match_in[j] == match_out[j]
+                                               for j in range(F)]))
+    scores["dead_components"] = int((mats["mass_in"].sum(1) < 1e-9).sum())
+    return scores
 
 
 # ---------------------------------------------------------------- diagnostics
 
 def vpd_diagnostics(pd_m: PD, p: float, batch: int = 2048, seed: int = 123) -> dict:
-    """Training-state diagnostics (VPD-gated where the machinery is VPD-specific):
-    ci_stats, method loss terms (raw + weighted), per-matrix ||delta||/||W||.
-    Makes 'stopped mid-sparsification' visible in every report."""
+    """Training-state diagnostics: ci_stats, method loss terms (raw + weighted),
+    per-matrix ||delta||/||W|| (VPD-gated where the machinery is VPD-specific)."""
     out = {}
     if hasattr(pd_m, "ci_stats"):
         out["ci_stats"] = pd_m.ci_stats(p)
     if hasattr(pd_m, "weight_delta"):
         out["delta_ratio"] = {n: float(pd_m.weight_delta(n).norm() / pd_m.targets[n].norm())
                               for n in pd_m.param_names}
-    if hasattr(pd_m, "_ci"):   # VPD: loss-term breakdown on a fresh batch
+    if hasattr(pd_m, "_ci"):
         model = pd_m.model
         ds = CleanDataset(n_features=model.n_features, p=float(p), device=model.device,
                           seed=seed)
@@ -227,7 +281,9 @@ def vpd_diagnostics(pd_m: PD, p: float, batch: int = 2048, seed: int = 123) -> d
 
 # ---------------------------------------------------------------- rendering
 
-_PANELS = [  # (key, title, cmap, vmin, vmax, which match orders the rows)
+_PANELS = [  # (key, title, cmap, vmin, vmax fixed or None, row order side)
+    ("act_in", "act_in: shard-only self-activation / s_j", "RdBu_r", -1.1, 1.1, "in"),
+    ("act_out", "act_out: shard-only self-activation / s_j", "RdBu_r", -1.1, 1.1, "out"),
     ("mass_in", "w_in mass fraction on feature j", "magma", 0.0, 1.0, "in"),
     ("mass_out", "w_out mass fraction on feature j", "magma", 0.0, 1.0, "out"),
     ("ci_in", "CI(w_in) ~ feature activity (corr)", "RdBu_r", -1.0, 1.0, "in"),
@@ -239,9 +295,8 @@ _PANELS = [  # (key, title, cmap, vmin, vmax, which match orders the rows)
 
 def plot_match_matrices(mats: dict, match_in: dict, match_out: dict, scores: dict,
                         tag: str, ctx: str) -> None:
-    """Up to 2x3 heatmaps. mass/ci panels are permuted by their OWN side's match
-    (row j = that side's match of feature j); fingerprint/ablation rows are the
-    mechanism pairs, already j-indexed."""
+    """Heatmap grid; every per-side panel is permuted by the ACTIVATION match of its
+    side (row j = that side's matched shard for feature j)."""
     os.makedirs(FIG_DIR, exist_ok=True)
     F = mats["mass_in"].shape[1]
     orders = {"in": np.array([match_in[j] for j in range(F)]),
@@ -259,20 +314,21 @@ def plot_match_matrices(mats: dict, match_in: dict, match_out: dict, scores: dic
         vmax = hi if hi is not None else max(float(np.abs(M).max()), 1e-12)
         im = ax.imshow(M, aspect="auto", cmap=cmap, vmin=lo, vmax=vmax,
                        interpolation="nearest")
-        row_lbl = {"in": "match_in(j)", "out": "match_out(j)", None: "pair j"}[side]
+        row_lbl = {"in": "act-match_in(j)", "out": "act-match_out(j)", None: "pair j"}[side]
         ax.set_title(title, fontsize=9)
         ax.set_xlabel("ExactPD feature j")
         ax.set_ylabel(f"row j = {row_lbl}")
         fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
-    s_in, s_out = scores["mass_in"], scores["mass_out"]
+    s_i, s_o = scores["in"], scores["out"]
     fig.suptitle(
         f"Component recovery vs ExactPD — {ctx}\n"
-        f"w_in: purity={s_in['purity']:.2f} cov={s_in['coverage']}/{F}   "
-        f"w_out: purity={s_out['purity']:.2f} cov={s_out['coverage']}/{F}   "
-        f"idx-agree={scores['index_agreement']:.2f}   "
-        f"solo/exact={scores['solo_ratio']:.2f}   "
-        f"abl.agree={scores.get('ablation_agreement', float('nan')):.2f}   "
-        f"dead={scores['dead_components']}", fontsize=11)
+        f"w_in: act={s_i['act_purity']:.2f} (cov {s_i['act_coverage']}/{F}) "
+        f"mass={s_i['mass_purity']:.2f}   "
+        f"w_out: act={s_o['act_purity']:.2f} (cov {s_o['act_coverage']}/{F}) "
+        f"mass={s_o['mass_purity']:.2f}   "
+        f"leak-align={scores.get('leak_align', float('nan')):.2f}   "
+        f"solo/exact={scores.get('solo_ratio', float('nan')):.2f}   "
+        f"abl={scores.get('ablation_agreement', float('nan')):.2f}", fontsize=11)
     out = os.path.join(FIG_DIR, f"{tag}_match_matrices.png")
     fig.savefig(out, dpi=140, bbox_inches="tight")
     plt.close(fig)
@@ -283,25 +339,22 @@ def plot_spectra_comparison(model, pd_e: PD, pd_m: PD, match_in: dict, match_out
                             mats: dict, cs: list[int], tag: str, ctx: str,
                             m_label: str = "VPD") -> None:
     """Rows = probe features, cols = full model | ExactPD component j | matched
-    mechanism PAIR (w_in comp match_in[j] + w_out comp match_out[j]) | learned dense
-    (all components, no delta). Red bar = target feature. Pair panel titles carry the
-    per-side match masses so chance-level matches cannot read as 'the correct
-    component'."""
+    mechanism PAIR | learned dense. Pair titles carry per-side ACT match quality."""
     os.makedirs(FIG_DIR, exist_ok=True)
     F = model.n_features
     ones_m = torch.ones(pd_m.C, device=model.device)
-    data = []   # (j, [(label, out_vector)])
+    data = []
     with torch.no_grad():
         for j in cs:
             x = torch.eye(F, device=model.device)[j:j + 1]
             oh_e = torch.zeros(pd_e.C, device=model.device); oh_e[j] = 1.0
             ki, ko = match_in[j], match_out[j]
-            q_in, q_out = mats["mass_in"][ki, j], mats["mass_out"][ko, j]
+            q_in, q_out = mats["act_in"][ki, j], mats["act_out"][ko, j]
             data.append((j, [
                 ("full model", model(x)[0].cpu().numpy()),
                 (f"ExactPD comp {j}",
                  pd_e.forward_masked(x, {n: oh_e for n in pd_e.param_names})[0].cpu().numpy()),
-                (f"{m_label} pair (in:{ki} m={q_in:.2f}, out:{ko} m={q_out:.2f})",
+                (f"{m_label} pair (in:{ki} act={q_in:.2f}, out:{ko} act={q_out:.2f})",
                  pd_m.forward_masked(x, _pair_mask(pd_m, ki, ko))[0].cpu().numpy()),
                 (f"{m_label} all components",
                  pd_m.forward_masked(x, {n: ones_m for n in pd_m.param_names})[0].cpu().numpy()),
@@ -321,7 +374,7 @@ def plot_spectra_comparison(model, pd_e: PD, pd_m: PD, match_in: dict, match_out
             if r == len(cs) - 1:
                 ax.set_xlabel("output feature")
         axes[r][0].set_ylabel(f"e_{j}: output value")
-    fig.suptitle(f"Output spectra — full vs ExactPD vs matched {m_label} mechanism pair "
+    fig.suptitle(f"Output spectra — full vs ExactPD vs act-matched {m_label} mechanism pair "
                  f"(one-hot probes; red = target)  —  {ctx}", fontsize=12)
     out = os.path.join(FIG_DIR, f"{tag}_match_spectra.png")
     fig.savefig(out, dpi=140, bbox_inches="tight")
@@ -333,19 +386,24 @@ def write_summary(scores: dict, diags: dict, mats: dict, tag: str, ctx: str) -> 
     os.makedirs(RES_DIR, exist_ok=True)
     F = mats["mass_in"].shape[1]
     lines = [f"### Component recovery vs ExactPD — {ctx}", "",
-             "| side | purity | coverage(>0.5) | split features | mean row entropy |",
-             "|---|---|---|---|---|"]
-    for side in ("mass_in", "mass_out"):
+             "| side | act purity | act cov(>0.5) | mass purity (act match) | "
+             "act-vs-mass match agree | mass row entropy | split |",
+             "|---|---|---|---|---|---|---|"]
+    for side in ("in", "out"):
         s = scores[side]
-        lines.append(f"| {side} | {s['purity']:.3f} | {s['coverage']}/{F} | "
-                     f"{s['split']} | {s['row_entropy']:.3f} |")
+        lines.append(f"| w_{side} | {s['act_purity']:.3f} | {s['act_coverage']}/{F} | "
+                     f"{s['mass_purity']:.3f} | {s['match_agree']:.2f} | "
+                     f"{s['row_entropy']:.3f} | {s['split']} |")
     lines += ["",
+              f"- leak alignment of matched write shards: {scores.get('leak_align', float('nan')):.3f}",
               f"- index agreement (match_in == match_out): {scores['index_agreement']:.3f}",
-              f"- solo/exact self-activation ratio (mean): {scores['solo_ratio']:.3f}",
-              f"- fingerprint purity (signed cosine): "
-              f"{scores.get('fingerprint_purity', float('nan')):.3f}",
+              f"- solo/exact self-activation ratio (pair): {scores.get('solo_ratio', float('nan')):.3f}",
+              f"- fingerprint purity (signed cosine): {scores.get('fingerprint_purity', float('nan')):.3f}",
               f"- ablation agreement: {scores.get('ablation_agreement', float('nan')):.3f}",
-              f"- dead components: {scores['dead_components']}"]
+              f"- dead components: {scores['dead_components']}", "",
+              "Reading: act high + mass high = ExactPD basis; act high + mass low + "
+              "leak-align high = same mechanism in the leak-aligned basis; act low = "
+              "genuinely distributed."]
     if diags:
         lines.append("")
         lines.append("#### Training-state diagnostics")
@@ -370,27 +428,25 @@ def write_summary(scores: dict, diags: dict, mats: dict, tag: str, ctx: str) -> 
 
 def run_suite(pd_m: PD, pd_e: PD, p: float, tag: str, ctx: str, cs: list[int],
               m_label: str = "VPD") -> dict:
-    """Mass matrices -> per-side Hungarian matching -> paired functional probes ->
-    render + summarise. Returns scores."""
+    """Activation matrices -> per-side Hungarian match -> paired probes + basis
+    characterization -> render + summarise. Returns scores."""
     F = pd_e.model.n_features
-    mats = mass_matrices(pd_m)
+    mats = activation_matrices(pd_m)
+    mats.update(mass_matrices(pd_m))
     mats.update(ci_coactivation(pd_m, p))
-    match_in = hungarian_match(mats["mass_in"])
-    match_out = hungarian_match(mats["mass_out"])
+    match_in = hungarian_match(mats["act_in"])
+    match_out = hungarian_match(mats["act_out"])
     mats["fingerprint"] = paired_fingerprint_matrix(pd_m, pd_e, match_in, match_out)
     mats["ablation"] = paired_ablation_matrix(pd_m, p, match_in, match_out)
     solo = solo_responses(pd_m, pd_e, match_in, match_out)
 
-    scores = {"mass_in": score_side(mats["mass_in"], match_in, F),
-              "mass_out": score_side(mats["mass_out"], match_out, F),
-              "index_agreement": float(np.mean([match_in[j] == match_out[j]
-                                                for j in range(F)])),
-              "solo_ratio": float(np.mean(solo["solo"] / np.where(
-                  np.abs(solo["exact"]) > 1e-9, solo["exact"], np.nan))),
-              "fingerprint_purity": float(np.mean(np.diag(mats["fingerprint"])[:F])),
-              "ablation_agreement": float(np.mean(
-                  [int(np.argmax(mats["ablation"][j]) == j) for j in range(F)])),
-              "dead_components": int((mats["mass_in"].sum(1) < 1e-9).sum())}
+    scores = score_sides(mats, match_in, match_out, F)
+    scores["leak_align"] = float(np.mean(leak_alignment(pd_m, match_out)))
+    scores["solo_ratio"] = float(np.nanmean(solo["solo"] / np.where(
+        np.abs(solo["exact"]) > 1e-9, solo["exact"], np.nan)))
+    scores["fingerprint_purity"] = float(np.mean(np.diag(mats["fingerprint"])[:F]))
+    scores["ablation_agreement"] = float(np.mean(
+        [int(np.argmax(mats["ablation"][j]) == j) for j in range(F)]))
 
     diags = vpd_diagnostics(pd_m, p)
     plot_match_matrices(mats, match_in, match_out, scores, tag, ctx)
@@ -402,9 +458,8 @@ def run_suite(pd_m: PD, pd_e: PD, p: float, tag: str, ctx: str, cs: list[int],
 
 
 def _identity_model(device="cpu"):
-    """MLP(100, 100) with w_in = w_out = I: no superposition, no interference --
-    per-feature rank-1 components are trivially the objective's optimum. The
-    decisive VPD port test: failure here is a bug, not task difficulty."""
+    """MLP(100, 100) with w_in = w_out = I: per-feature rank-1 components are
+    trivially the objective's optimum. The decisive VPD port test."""
     from mlp import MLP
     model = MLP(n_features=100, d_mlp=100, device=device)
     with torch.no_grad():
@@ -437,9 +492,9 @@ def main():
         pd_e = ExactPD(model)
         scores = run_suite(pd_e, pd_e, 0.1, "selftest_ExactPD",
                            "ExactPD vs itself (MLP d50 p=0.1)", a.c, m_label="ExactPD")
-        ok = (scores["mass_in"]["purity"] > 0.999 and scores["mass_out"]["purity"] > 0.999
-              and scores["fingerprint_purity"] > 0.999
-              and scores["index_agreement"] > 0.999)
+        ok = (scores["in"]["act_purity"] > 0.999 and scores["out"]["act_purity"] > 0.999
+              and scores["in"]["mass_purity"] > 0.999 and scores["out"]["mass_purity"] > 0.999
+              and scores["in"]["match_agree"] > 0.999 and scores["index_agreement"] > 0.999)
         print(f"self-test {'PASS' if ok else 'FAIL'}")
         raise SystemExit(0 if ok else 1)
 
@@ -455,7 +510,7 @@ def main():
         scores = run_suite(pd_v, pd_e, p, f"identity_control_VPD_{a.steps}",
                            f"identity model (w_in=w_out=I), p={p}, VPD {a.steps} steps",
                            a.c, m_label="VPD")
-        ok = scores["mass_in"]["purity"] > 0.9 and scores["mass_out"]["purity"] > 0.9
+        ok = scores["in"]["act_purity"] > 0.9 and scores["out"]["act_purity"] > 0.9
         print(f"identity control {'PASS' if ok else 'FAIL (port/config suspect if 25k also fails)'}")
         return
 
