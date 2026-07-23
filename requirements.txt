@@ -8,3 +8,4 @@ einops==0.8.2
 jaxtyping==0.3.7
 tqdm==4.68.4
 pandas==2.3.3
+scipy==1.15.3
