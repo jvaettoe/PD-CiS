@@ -148,3 +148,19 @@ each model (`toys/<name>/MEMO.md`); this file records what was done and when.
   finding). Caveat: 4-scalar fit may sit in a shallow-valley optimum (known
   issue); multi-start fit is the next refinement before strong conclusions.
   results/figures: toys/chain/stacked_codes.{md,png}.
+
+## 2026-08-14 — Repo reorganized; biregular models ported into Goodfire's param-decomp
+- Root modules reorganized into core/, biregular/, embed/ packages (git mv,
+  package-absolute imports, shared core/paths.py anchors; ksweep output
+  verified byte-identical post-move). Commit f1233c6.
+- Ported both biregular targets (designed CodeAnsatz K=5 transpose p=0.001 and
+  trained MLP p=0.001 s42) into Goodfire's param-decomp clone as a new
+  experiments/biregular/ (local branch biregular-port; MIT). Exports with
+  bit-exact forward equivalence (biregular/export_goodfire.py, commit c168dcf).
+- Environment saga (Intel mac): repo pins py3.13/torch>=2.6 — no x86_64 wheels.
+  Relaxed on the local branch to py3.12/torch 2.2.2 + torchvision>=0.17,
+  numpy<2, wandb 0.21.4 (ships wandb_gql), numba dropped (unused). Goodfire's
+  own TMS test suite passes 4/4 on this stack — environment validated.
+- Smoke decompositions (250 steps) of both models ran clean end-to-end.
+  Full 10k-step runs launched; readout (alive counts, write-side basis
+  structure vs our port's 53-alive/per-neuron result) to follow.
