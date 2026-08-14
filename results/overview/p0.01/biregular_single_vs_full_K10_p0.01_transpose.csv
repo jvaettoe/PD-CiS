@@ -1,0 +1,5 @@
+variant,stat,L4 single,L4 full,L4 single/full
+no-swap,mean,1.158e-04,3.502e-04,0.331
+no-swap,max,1.158e-04,7.224e-04,0.160
+overlap-min,mean,4.149e-05,1.645e-04,0.252
+overlap-min,max,4.149e-05,2.821e-04,0.147

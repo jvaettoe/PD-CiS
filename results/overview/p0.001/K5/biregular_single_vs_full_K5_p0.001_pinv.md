@@ -1,0 +1,8 @@
+### Biregular K5 p=0.001 (pinv): single-component / full-model forward-pass L4 ratio
+
+| variant | stat | L4 single | L4 full | L4 single/full |
+|---|---|---|---|---|
+| no-swap | mean | 4.535e-05 | 1.592e-04 | 0.285 |
+| no-swap | max | 2.190e-04 | 3.677e-04 | 0.596 |
+| overlap-min | mean | 1.892e-05 | 8.939e-05 | 0.212 |
+| overlap-min | max | 4.679e-05 | 1.361e-04 | 0.344 |
