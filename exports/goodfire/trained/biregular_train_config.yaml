@@ -1,0 +1,4 @@
+biregular_model_config:
+  n_features: 100
+  d_mlp: 50
+provenance: "trained MLP d50 p=0.001 n4 seed42 (ncc checkpoint)"

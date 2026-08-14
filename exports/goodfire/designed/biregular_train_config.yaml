@@ -1,0 +1,4 @@
+biregular_model_config:
+  n_features: 100
+  d_mlp: 50
+provenance: "CodeAnsatz K=5 seed0 noswap transpose, fit_ab(p=0.001) a=0.3646 b=-0.0476"
