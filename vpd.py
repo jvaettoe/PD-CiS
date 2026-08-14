@@ -21,14 +21,16 @@ weights, regression):
   - Matrices kept in this repo's x @ W orientation: V [d0, C], U [C, d1], component
     reconstruction V @ U ~ W (their nn.Linear convention stores the transpose).
   - CI function: one shared MLP per matrix (their VectorSharedMLPCiFn / fn_type
-    "shared_mlp", hidden scaled to [64] for these small models) on the matrix's input
-    activation; leaky-hard lower/upper sigmoid pair with their 1.05x - 0.05*rand lower
-    jitter.
+    "shared_mlp", hidden scaled to [64] from their [256] for these small models) on the
+    matrix's input activation; leaky-hard lower/upper sigmoid pair. The lower sigmoid
+    reproduces their custom autograd Function (revival gradient: alpha*grad for x<=0
+    when grad<0). NO lower jitter: their 1.05x - 0.05*rand applies only under binomial
+    sampling, and the toy recipe runs continuous.
   - The faithfulness warmup is data-free (pure ||W - VU|| matching) and runs in __init__.
   - PGD adversarial masks: shared-across-batch source [1, C+1] per matrix (last slot =
     weight-delta mask), 1 signed-gradient step of size 1.0, clamped to [0,1], fresh per
     loss() call (their non-persistent PGDReconSubsetLoss, as used by the toy config --
-    NOT the LM PersistentPGD).
+    NOT the LM PersistentPGD), evaluated under a shared UniformK subset-routing draw.
   - Subset routing: per example, a uniform-k random subset of the two matrices runs in
     component mode; the rest use the frozen target weights (their UniformKSubsetRouter).
 
@@ -47,10 +49,33 @@ from pd import PD
 CI_ALIVE_THRESHOLD = 0.1   # their ci_alive_threshold
 
 
+class _LowerLeakyHardSigmoid(torch.autograd.Function):
+    """Their LowerLeakyHardSigmoidFunction: forward clamp(x,0,1); backward leaks
+    alpha*grad for x<=0 ONLY when the gradient is negative (the loss wants the mask
+    larger) -- the revival gradient that lets a dead component come back. A plain
+    clamp (our previous approximation) zeroes that gradient and dead components
+    stay dead forever."""
+
+    @staticmethod
+    def forward(ctx, x: Tensor, alpha: float = 0.01) -> Tensor:
+        ctx.save_for_backward(x)
+        ctx.alpha = alpha
+        return torch.clamp(x, min=0.0, max=1.0)
+
+    @staticmethod
+    def backward(ctx, grad_output: Tensor):
+        (x,) = ctx.saved_tensors
+        grad_input = torch.where(
+            x <= 0,
+            torch.where(grad_output < 0, ctx.alpha * grad_output,
+                        torch.zeros_like(grad_output)),
+            torch.where(x <= 1, grad_output, torch.zeros_like(grad_output)),
+        )
+        return grad_input, None
+
+
 def _leaky_hard_lower(x: Tensor, alpha: float = 0.01) -> Tensor:
-    """lower_leaky_hard_sigmoid: clamp(x,0,1) forward; leaky-below-0 backward is
-    approximated by the plain leaky form (adequate for these toys)."""
-    return torch.where(x > 0, torch.clamp(x, max=1.0), alpha * x).clamp(min=-1.0)
+    return _LowerLeakyHardSigmoid.apply(x, alpha)
 
 
 def _leaky_hard_upper(x: Tensor, alpha: float = 0.01) -> Tensor:
@@ -64,6 +89,11 @@ class _CiFn(nn.Module):
     def __init__(self, d_in: int, C: int, hidden: int = 64):
         super().__init__()
         self.net = nn.Sequential(nn.Linear(d_in, hidden), nn.GELU(), nn.Linear(hidden, C))
+        # their init_param_: Kaiming-normal (fan = input dim, gain 1), zero bias
+        for m in self.net:
+            if isinstance(m, nn.Linear):
+                nn.init.normal_(m.weight, 0.0, m.in_features ** -0.5)
+                nn.init.zeros_(m.bias)
 
     def forward(self, x: Float[Tensor, "batch d_in"]) -> Float[Tensor, "batch C"]:
         return self.net(x)
@@ -84,11 +114,10 @@ class VPD(PD):
         for name, t in self.targets.items():
             d0, d1 = t.shape
             key = self._key(name)
-            # their init_param_: fan-based uniform; kaiming-uniform is the close analog
-            V = torch.empty(d0, C, device=t.device)
-            U = torch.empty(C, d1, device=t.device)
-            nn.init.kaiming_uniform_(V)
-            nn.init.kaiming_uniform_(U)
+            # their init_param_: Kaiming-NORMAL, gain 1 ("linear"), explicit fan
+            # (V: fan = d_in = d0; U: fan = C)
+            V = torch.empty(d0, C, device=t.device).normal_(0.0, d0 ** -0.5)
+            U = torch.empty(C, d1, device=t.device).normal_(0.0, C ** -0.5)
             self.V[key] = nn.Parameter(V)
             self.U[key] = nn.Parameter(U)
             self.ci_fns[key] = _CiFn(d0, C, ci_hidden).to(t.device)
@@ -119,7 +148,8 @@ class VPD(PD):
         main fit. Data-free (pure weight matching)."""
         if steps <= 0:
             return
-        opt = torch.optim.AdamW([p for k in self.V for p in (self.V[k], self.U[k])], lr=lr)
+        opt = torch.optim.AdamW([p for k in self.V for p in (self.V[k], self.U[k])],
+                                lr=lr, weight_decay=0.0)  # their warmup wd is 0.0
         for _ in range(steps):
             loss = sum(((self.targets[n] - self._vu(n)) ** 2).mean() for n in self.param_names)
             opt.zero_grad()
@@ -130,12 +160,13 @@ class VPD(PD):
 
     def _ci(self, e: Tensor, h: Tensor) -> tuple[dict, dict]:
         """(ci_lower, ci_upper) per matrix. Inputs: e = embedded input (feeds w_in),
-        h = hidden activation (feeds w_out). Lower gets their 1.05x-0.05*rand jitter."""
+        h = hidden activation (feeds w_out). NB their 1.05x-0.05*rand jitter applies
+        only under binomial sampling; the toy recipe (and we) run continuous, so the
+        pre-sigmoid CI feeds the lower sigmoid unmodified."""
         lower, upper = {}, {}
         for name, act in (("w_in", e), ("w_out", h)):
             pre = self.ci_fns[self._key(name)](act)
-            jit = 1.05 * pre - 0.05 * torch.rand_like(pre)
-            lower[name] = _leaky_hard_lower(jit).clamp(min=0.0)   # mask source in [0,1]
+            lower[name] = _leaky_hard_lower(pre)   # in [0,1]; leaky revival backward
             upper[name] = _leaky_hard_upper(pre)
         return lower, upper
 
@@ -202,14 +233,17 @@ class VPD(PD):
         routing = self._uniform_k_subset_routing(B, device)
         stoch = F.mse_loss(self._forward_masked_vpd(x, masks, dmasks, routing), target_output)
 
-        # PGD adversarial recon: shared-across-batch source [1, C+1], signed steps
+        # PGD adversarial recon: shared-across-batch source [1, C+1], signed steps.
+        # Their PGDReconSubsetLoss evaluates the adversary UNDER subset routing --
+        # one routing draw shared by the inner ascent steps and the final loss.
+        pgd_routing = self._uniform_k_subset_routing(B, device)
         adv = {n: torch.rand(1, self.C + 1, device=device, requires_grad=True)
                for n in ci_lower}
         for _ in range(pgd_steps):
             am = {n: ci_lower[n].detach() + (1 - ci_lower[n].detach()) * a[:, :self.C]
                   for n, a in adv.items()}
             dm = {n: a[:, self.C].expand(B) for n, a in adv.items()}
-            pl = F.mse_loss(self._forward_masked_vpd(x, am, dm, None), target_output)
+            pl = F.mse_loss(self._forward_masked_vpd(x, am, dm, pgd_routing), target_output)
             grads = torch.autograd.grad(pl, list(adv.values()))
             with torch.no_grad():
                 for a, g in zip(adv.values(), grads):
@@ -218,7 +252,7 @@ class VPD(PD):
         am = {n: ci_lower[n] + (1 - ci_lower[n]) * adv[n][:, :self.C].detach()
               for n in ci_lower}
         dm = {n: adv[n][:, self.C].detach().expand(B) for n in ci_lower}
-        pgd = F.mse_loss(self._forward_masked_vpd(x, am, dm, None), target_output)
+        pgd = F.mse_loss(self._forward_masked_vpd(x, am, dm, pgd_routing), target_output)
 
         return {"importance": (imp, alpha_importance),
                 "stoch_recon": (stoch, alpha_stoch),

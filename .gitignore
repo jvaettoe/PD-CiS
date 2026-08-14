@@ -3,5 +3,4 @@ __pycache__/
 *.pyc
 checkpoints/
 figures/
-results/
 .DS_Store

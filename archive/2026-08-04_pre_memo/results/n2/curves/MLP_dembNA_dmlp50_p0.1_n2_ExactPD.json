@@ -1,0 +1,39 @@
+{
+  "config": {
+    "run_id": "MLP_dembNA_dmlp50_p0.1_n2_ExactPD",
+    "model": "MLP",
+    "n_features": 100,
+    "d_emb": null,
+    "d_mlp": 50,
+    "p": "0.1",
+    "n_exp": 2,
+    "method": "ExactPD",
+    "C": 100,
+    "k": 10,
+    "steps": 1,
+    "lr": 0.001,
+    "batch_size": 2048,
+    "seed": 42,
+    "loss_kwargs": {
+      "alpha_faithfulness": 1.0,
+      "k": 10,
+      "alpha_minimality": 1.0,
+      "alpha_simplicity": 1.0,
+      "p": 1.0
+    }
+  },
+  "curves": {
+    "faithful": [
+      0.0
+    ],
+    "minimal": [
+      0.002596291247755289
+    ],
+    "simple": [
+      0.001454765908420086
+    ],
+    "total": [
+      0.004051057156175375
+    ]
+  }
+}

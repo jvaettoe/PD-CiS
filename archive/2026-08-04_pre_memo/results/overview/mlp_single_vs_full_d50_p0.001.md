@@ -1,0 +1,6 @@
+### MLP d_mlp=50, p=0.001: single-component / full-model forward-pass loss ratio (full model = benchmark)
+
+| variant | stat | MSE single | MSE full | MSE single/full | L4 single | L4 full | L4 single/full |
+|---|---|---|---|---|---|---|---|
+| MLP d50 | mean | 3.355e-04 | 7.116e-03 | 0.047 | 1.126e-05 | 6.207e-05 | 0.181 |
+| MLP d50 | max | 3.674e-04 | 7.606e-03 | 0.048 | 1.349e-05 | 7.018e-05 | 0.192 |

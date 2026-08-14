@@ -134,7 +134,7 @@ def _run_method(model, dataset, spec, method, *, smoke, force,
     pd_obj = decomp_fit.build_pd(method, model, C)
     curves = decomp_fit.fit_decomposition(
         pd_obj, dataset, steps=steps, loss_kwargs=loss_kwargs,
-        lr=decomp_fit.DEFAULT_LR, batch_size=batch, seed=SEED, desc=run_id,
+        batch_size=batch, seed=SEED, desc=run_id,  # lr resolves per method (METHOD_LR)
     )
     finals = {term: values[-1] for term, values in curves.items()}
 

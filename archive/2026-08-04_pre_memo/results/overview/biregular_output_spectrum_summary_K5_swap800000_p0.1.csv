@@ -1,0 +1,5 @@
+model,mean self-response,off-target leak,leak/self ratio
+biregular pinv (overlap-min),7.656035e-01,7.653632e-01,9.996861e-01
+biregular transpose (overlap-min),8.950672e-01,9.801405e-01,1.095047e+00
+MLP (fully-trained d50),7.124704e-01,7.167325e-01,1.005982e+00
+ignore-50 (no superposition),5.000000e-01,0.000000e+00,0.000000e+00

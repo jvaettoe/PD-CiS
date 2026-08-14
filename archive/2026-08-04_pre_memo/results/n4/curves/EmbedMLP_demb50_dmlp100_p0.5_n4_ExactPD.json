@@ -1,0 +1,39 @@
+{
+  "config": {
+    "run_id": "EmbedMLP_demb50_dmlp100_p0.5_n4_ExactPD",
+    "model": "EmbedMLP",
+    "n_features": 100,
+    "d_emb": 50,
+    "d_mlp": 100,
+    "p": "0.5",
+    "n_exp": 4.0,
+    "method": "ExactPD",
+    "C": 100,
+    "k": 50,
+    "steps": 1,
+    "lr": 0.001,
+    "batch_size": 2048,
+    "seed": 42,
+    "loss_kwargs": {
+      "alpha_faithfulness": 1.0,
+      "k": 50,
+      "alpha_minimality": 1.0,
+      "alpha_simplicity": 1.0,
+      "p": 1.0
+    }
+  },
+  "curves": {
+    "faithful": [
+      0.0
+    ],
+    "minimal": [
+      0.01495133712887764
+    ],
+    "simple": [
+      0.004463364370167255
+    ],
+    "total": [
+      0.01941470056772232
+    ]
+  }
+}

@@ -1,0 +1,5 @@
+model,MSE on-target,MSE off-target,MSE total,L4 on-target,L4 off-target,L4 total
+biregular pinv (no-swap),5.918067e-02,5.837406e-01,6.429213e-01,4.530982e-03,1.138564e-02,1.591662e-02
+biregular transpose (no-swap),2.064466e-02,1.509778e+00,1.530422e+00,4.262018e-04,6.867354e-02,6.909974e-02
+MLP (fully-trained d50),3.354508e-02,6.780685e-01,7.116135e-01,1.126498e-03,5.080550e-03,6.207049e-03
+ignore-50 (no superposition),5.000000e-01,0.000000e+00,5.000000e-01,5.000000e-01,0.000000e+00,5.000000e-01

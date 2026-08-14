@@ -1,0 +1,8 @@
+### Biregular K5 p=0.1 (pinv): single-component / full-model forward-pass loss ratio (full model = benchmark)
+
+| variant | stat | MSE single | MSE full | MSE single/full | L4 single | L4 full | L4 single/full |
+|---|---|---|---|---|---|---|---|
+| no-swap | mean | 8.227e-04 | 5.977e-03 | 0.138 | 8.079e-05 | 1.696e-04 | 0.476 |
+| no-swap | max | 1.779e-03 | 6.774e-03 | 0.263 | 3.165e-04 | 4.314e-04 | 0.734 |
+| overlap-min | mean | 5.531e-04 | 6.411e-03 | 0.086 | 3.141e-05 | 9.223e-05 | 0.341 |
+| overlap-min | max | 8.306e-04 | 6.663e-03 | 0.125 | 6.899e-05 | 1.398e-04 | 0.494 |

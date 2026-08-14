@@ -12,15 +12,23 @@ from collections import defaultdict
 import torch
 from tqdm import tqdm
 
-import cc
-import results_io
-from cc import set_seed
+import random
+
+import numpy as np
+
 from data import SparseDataset
 from mlp import MLPBase
 from pd import PD, APD, OracleAPD, SPD, ExactPD
 from vpd import VPD
 
 METHODS = ("APD", "OracleAPD", "SPD", "ExactPD", "VPD")
+
+
+def set_seed(seed: int) -> None:
+    """Inlined from the archived cc.py (memo iteration: training stack not restored)."""
+    torch.manual_seed(seed)
+    np.random.seed(seed)
+    random.seed(seed)
 
 # Per-method step budgets. OracleAPD recomputes importance with C leave-one-out
 # forwards per step, so it gets far fewer steps than the gradient-attribution
@@ -31,6 +39,9 @@ METHOD_STEPS = {"APD": 3000, "OracleAPD": 500, "SPD": 5000, "ExactPD": 1,
                 "VPD": 25_000}  # VPD: Goodfire resid_mlp2 reference (GPU-scale;
                                 # on CPU pass --steps-scale 0.16 for the old 4k budget)
 DEFAULT_LR = 1e-3
+# Per-method LR overrides: VPD's reference (resid_mlp2 config) trains at a constant
+# 3e-4 (AdamW, weight_decay 0 == our Adam), not the harness default 1e-3.
+METHOD_LR = {"VPD": 3e-4}
 DEFAULT_BATCH = 2048
 ORACLE_BATCH = 1024
 
@@ -107,7 +118,7 @@ def fit_decomposition(
     *,
     steps: int,
     loss_kwargs: dict,
-    lr: float = DEFAULT_LR,
+    lr: float | None = None,
     batch_size: int = DEFAULT_BATCH,
     seed: int | None = None,
     log_every: int = 1,
@@ -125,6 +136,10 @@ def fit_decomposition(
     importance/total)."""
     if seed is not None:
         set_seed(seed)  # reproducible PD init + SPD stochastic masks (global RNG)
+
+    # lr=None resolves per method (VPD's reference recipe is 3e-4, not the default)
+    if lr is None:
+        lr = METHOD_LR.get(type(pd_obj).__name__, DEFAULT_LR)
 
     params = [p for p in pd_obj.parameters() if p.requires_grad]
     # ExactPD (and any analytic decomposition) has no trainable params: skip the
@@ -161,45 +176,6 @@ def fit_decomposition(
 # We save ONLY the decomposition's own params (not the frozen model, which
 # lives in the checkpoint cache and is reloaded from `ckpt`), keyed by run_id.
 # --------------------------------------------------------------------------
-
-def save_decomposition(run_id: str, pd_obj: PD, ckpt_meta: dict, method: str) -> dict:
-    """Write results/<tag>/decomps/<run_id>.pt = the fitted component tensors, a
-    pointer to the model checkpoint needed to reload+project them, AND the
-    per-component metrics (monosemanticity etc.). Atomic (tmp + replace).
-    `ckpt_meta` = {str_p, model_class, model_kwargs, n_exp, seed}. Returns the
-    metrics dict so the caller can also log the aggregates to a CSV."""
-    metrics = pd_obj.component_metrics()
-    state = {k: v for k, v in pd_obj.state_dict().items() if not k.startswith("model.")}
-    payload = {"method": method, "C": pd_obj.C,
-               "rank": getattr(pd_obj, "rank", None),
-               "param_names": list(pd_obj.param_names),
-               "pd_state": state, "ckpt": ckpt_meta, "metrics": metrics}
-    path = results_io.decomp_path(run_id)
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    tmp = path + ".tmp"
-    torch.save(payload, tmp)
-    os.replace(tmp, path)
-    return metrics
-
-
-def load_decomposition(run_id: str, device: str = "cpu") -> PD:
-    """Rebuild a fitted decomposition for inspection: reload its model from the
-    checkpoint cache, rebuild the PD, load the saved component params. Requires
-    both the decomp .pt and the model checkpoint to exist."""
-    path = results_io.decomp_path(run_id)
-    if not os.path.exists(path):
-        raise FileNotFoundError(f"no saved decomposition for {run_id}: {path}")
-    payload = torch.load(path, map_location=device, weights_only=False)
-    ck = payload["ckpt"]
-    model_cls = cc._MODEL_REGISTRY[ck["model_class"]]
-    ckpt = cc.checkpoint_path(ck["str_p"], model_cls, ck["model_kwargs"],
-                              seed=ck["seed"], n_exp=ck["n_exp"])
-    if not os.path.exists(ckpt):
-        raise FileNotFoundError(
-            f"model checkpoint for {run_id} not found: {ckpt} "
-            f"(pull the checkpoints, or re-train that model)")
-    model = cc.load_checkpoint(ckpt, device=device)["model"]
-    rank = payload.get("rank") or APD_RANK
-    pd_obj = build_pd(payload["method"], model, payload["C"], rank=rank)
-    pd_obj.load_state_dict(payload["pd_state"], strict=False)
-    return pd_obj
+# save_decomposition / load_decomposition (checkpoint-backed) are NOT restored in
+# the memo iteration -- they need the archived cc.py training stack. See
+# archive/2026-08-04_pre_memo/code/decomp_fit.py.
