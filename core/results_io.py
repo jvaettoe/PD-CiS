@@ -23,10 +23,12 @@ import csv
 import glob
 import json
 import os
+
+from core.paths import REPO_ROOT
 import re
 from datetime import datetime
 
-_BASE_RESULTS = os.path.join(os.path.dirname(__file__), "results")
+_BASE_RESULTS = os.path.join(REPO_ROOT, "results")
 RESULTS_DIR = _BASE_RESULTS   # base root; the per-n topical subdirs derive from run_id
 
 

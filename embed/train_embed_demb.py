@@ -7,16 +7,18 @@ skipped (e.g. 40 — the transition probe between d_emb=20 and d_emb=N=50).
 """
 import argparse
 import os
+
+from core.paths import REPO_ROOT
 import random
 
 import numpy as np
 import torch
 from tqdm import tqdm
 
-from data import CleanDataset
-from mlp import EmbedMLP
+from core.data import CleanDataset
+from core.mlp import EmbedMLP
 
-CKPT_DIR = os.path.join(os.path.dirname(__file__), "checkpoints")
+CKPT_DIR = os.path.join(REPO_ROOT, "checkpoints")
 
 
 def train(d_emb: int, p: float, steps: int, seed: int) -> str:

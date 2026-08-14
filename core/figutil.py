@@ -5,14 +5,16 @@ params into the sub-folder, the filename, AND the title, so any figure's
 provenance is readable from the file browser and the image alike."""
 
 import os
+
+from core.paths import REPO_ROOT
 from collections import defaultdict
 
 import matplotlib.pyplot as plt
 
-from results_io import _fmt_n, parse_run_id
-from pd_viz import component_title  # noqa: F401  (re-export; single-PD figures now live on PDViz)
+from core.results_io import _fmt_n, parse_run_id
+from core.pd_viz import component_title  # noqa: F401  (re-export; single-PD figures now live on PDViz)
 
-FIG_ROOT = os.path.join(os.path.dirname(__file__), "figures")
+FIG_ROOT = os.path.join(REPO_ROOT, "figures")
 
 
 def set_tag(tag: str | None) -> None:

@@ -17,16 +17,18 @@ W_out only as an over-sparsification failure mode (CIs collapse, recon degrades)
 import argparse
 import os
 
+from core.paths import REPO_ROOT
+
 import torch
 
-import decomp_fit
-from biregular_ansatz import CodeAnsatz
-from component_match import run_suite
-from data import CleanDataset
-from pd import ExactPD
-from vpd import VPD
+import core.decomp_fit as decomp_fit
+from biregular.biregular_ansatz import CodeAnsatz
+from biregular.component_match import run_suite
+from core.data import CleanDataset
+from core.pd import ExactPD
+from core.vpd import VPD
 
-DECOMP_DIR = os.path.join(os.path.dirname(__file__), "results", "biregular", "decomps")
+DECOMP_DIR = os.path.join(REPO_ROOT, "results", "biregular", "decomps")
 F = 100
 FIT_SEED = 31337
 

@@ -13,8 +13,8 @@ import matplotlib.pyplot as plt
 from matplotlib.cm import ScalarMappable
 from matplotlib.colors import Normalize
 
-from data import CleanDataset
-from pd import PD
+from core.data import CleanDataset
+from core.pd import PD
 
 
 class MLPBase(nn.Module, ABC):

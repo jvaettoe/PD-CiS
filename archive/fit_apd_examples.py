@@ -12,10 +12,10 @@ matplotlib.use("Agg")
 import torch
 
 import cc
-import decomp_fit
-import figutil
-import results_io
-from mlp import EmbedMLP, LinearMLP
+import core.decomp_fit as decomp_fit
+import core.figutil as figutil
+import core.results_io as results_io
+from core.mlp import EmbedMLP, LinearMLP
 
 N_EXP = 2.0
 C = 100

@@ -7,8 +7,8 @@ from torch import Tensor
 from torch.func import functional_call
 from jaxtyping import Float, Int
 
-from data import CleanDataset
-from pd_viz import PDViz
+from core.data import CleanDataset
+from core.pd_viz import PDViz
 
 
 class PD(PDViz, nn.Module, ABC):

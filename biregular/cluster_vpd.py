@@ -26,20 +26,22 @@ import json
 import math
 import os
 
+from core.paths import REPO_ROOT
+
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
 
-from biregular_ansatz import CodeAnsatz
-from biregular_vpd_compare import _decomp_path
-from component_match import _write_shard_owners, activation_matrices, hungarian_match
-from data import CleanDataset
-from vpd import VPD
+from biregular.biregular_ansatz import CodeAnsatz
+from biregular.biregular_vpd_compare import _decomp_path
+from biregular.component_match import _write_shard_owners, activation_matrices, hungarian_match
+from core.data import CleanDataset
+from core.vpd import VPD
 
-RES_DIR = os.path.join(os.path.dirname(__file__), "results", "overview")
-FIG_DIR = os.path.join(os.path.dirname(__file__), "figures", "comparison")
+RES_DIR = os.path.join(REPO_ROOT, "results", "overview")
+FIG_DIR = os.path.join(REPO_ROOT, "figures", "comparison")
 TAU = 0.01          # their clustering-appendix binarization threshold
 RANGE_THR = 0.05    # their range_sampler threshold
 

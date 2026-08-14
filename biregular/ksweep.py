@@ -13,6 +13,8 @@ Outputs: results/ksweep/ + figures/ksweep/.
   ./.venv/bin/python ksweep.py
 """
 import os
+
+from core.paths import REPO_ROOT
 import random
 
 import matplotlib
@@ -22,12 +24,12 @@ import numpy as np
 import torch
 from tqdm import tqdm
 
-from data import CleanDataset
-from mlp import MLP
+from core.data import CleanDataset
+from core.mlp import MLP
 
-CKPT_DIR = os.path.join(os.path.dirname(__file__), "checkpoints")
-RES_DIR = os.path.join(os.path.dirname(__file__), "results", "ksweep")
-FIG_DIR = os.path.join(os.path.dirname(__file__), "figures", "ksweep")
+CKPT_DIR = os.path.join(REPO_ROOT, "checkpoints")
+RES_DIR = os.path.join(REPO_ROOT, "results", "ksweep")
+FIG_DIR = os.path.join(REPO_ROOT, "figures", "ksweep")
 PS = (0.001, 0.002, 0.005, 0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 0.8, 1.0)
 SEED = 42
 TAU = 0.05

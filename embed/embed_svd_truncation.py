@@ -13,16 +13,18 @@ Outputs: results/embedded/truncation/ + figures/embedded/truncation/.
 """
 import os
 
+from core.paths import REPO_ROOT
+
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
 
-from embed_exact_decomposition import decompose, load_embed_mlp
+from embed.embed_exact_decomposition import decompose, load_embed_mlp
 
-RES_DIR = os.path.join(os.path.dirname(__file__), "results", "embedded", "truncation")
-FIG_DIR = os.path.join(os.path.dirname(__file__), "figures", "embedded", "truncation")
+RES_DIR = os.path.join(REPO_ROOT, "results", "embedded", "truncation")
+FIG_DIR = os.path.join(REPO_ROOT, "figures", "embedded", "truncation")
 D_EMBS = (20, 50, 200, 1000)
 JS = (0, 33, 66)
 MODES = ("joint", "win-only", "wout-only")

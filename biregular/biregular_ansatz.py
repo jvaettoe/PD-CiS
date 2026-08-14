@@ -26,23 +26,25 @@ import argparse
 import csv
 import os
 
+from core.paths import REPO_ROOT
+
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
 
-import codes
-from data import CleanDataset
-from mlp import MLP
-from pd import ExactPD
+import core.codes as codes
+from core.data import CleanDataset
+from core.mlp import MLP
+from core.pd import ExactPD
 
 F, N = 100, 50            # feature count, neuron count
 P_DEFAULT = 0.001         # the memo's sparsity
 K_CHOICES = (4, 5, 6, 7)
 
-FIG_BASE = os.path.join(os.path.dirname(__file__), "figures", "biregular")
-RES_DIR = os.path.join(os.path.dirname(__file__), "results", "overview")
+FIG_BASE = os.path.join(REPO_ROOT, "figures", "biregular")
+RES_DIR = os.path.join(REPO_ROOT, "results", "overview")
 
 # ExactPD loss kwargs (formerly decomp_fit.loss_kwargs_for("ExactPD", k)):
 EXACTPD_LOSS_KW = dict(alpha_faithfulness=1.0, alpha_minimality=1.0,

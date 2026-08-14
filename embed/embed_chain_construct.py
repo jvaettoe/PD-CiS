@@ -24,16 +24,18 @@ neuron patterns than the model uses. Measured below, not assumed.
 """
 import os
 
+from core.paths import REPO_ROOT
+
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
 
-from embed_exact_decomposition import decompose, load_embed_mlp
+from embed.embed_exact_decomposition import decompose, load_embed_mlp
 
-RES_DIR = os.path.join(os.path.dirname(__file__), "results", "embedded")
-FIG_DIR = os.path.join(os.path.dirname(__file__), "figures", "embedded")
+RES_DIR = os.path.join(REPO_ROOT, "results", "embedded")
+FIG_DIR = os.path.join(REPO_ROOT, "figures", "embedded")
 JS = (0, 33, 66)
 
 

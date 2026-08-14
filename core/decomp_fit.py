@@ -16,10 +16,10 @@ import random
 
 import numpy as np
 
-from data import SparseDataset
-from mlp import MLPBase
-from pd import PD, APD, OracleAPD, SPD, ExactPD
-from vpd import VPD
+from core.data import SparseDataset
+from core.mlp import MLPBase
+from core.pd import PD, APD, OracleAPD, SPD, ExactPD
+from core.vpd import VPD
 
 METHODS = ("APD", "OracleAPD", "SPD", "ExactPD", "VPD")
 

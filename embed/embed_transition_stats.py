@@ -21,6 +21,8 @@ import argparse
 import glob
 import json
 import os
+
+from core.paths import REPO_ROOT
 import random
 
 import matplotlib
@@ -30,15 +32,15 @@ import numpy as np
 import torch
 from tqdm import tqdm
 
-from biregular_ansatz import CodeAnsatz
-from data import CleanDataset
-from embed_exact_decomposition import load_embed_mlp
-from embed_equivalence import (P, SEED_EVAL, SWAPS_OM, TAU, battery,
+from biregular.biregular_ansatz import CodeAnsatz
+from core.data import CleanDataset
+from embed.embed_exact_decomposition import load_embed_mlp
+from embed.embed_equivalence import (P, SEED_EVAL, SWAPS_OM, TAU, battery,
                                make_battery_figures, perfeature_mse, table_md)
-from mlp import MLP
-from train_embed_demb import train as train_embed
+from core.mlp import MLP
+from embed.train_embed_demb import train as train_embed
 
-ROOT = os.path.dirname(__file__)
+ROOT = REPO_ROOT
 CKPT_DIR = os.path.join(ROOT, "checkpoints")
 RES_STATS = os.path.join(ROOT, "results", "embedded", "equivalence_p0.01", "stats")
 FIG_STATS = os.path.join(ROOT, "figures", "embedded", "equivalence_p0.01", "stats")

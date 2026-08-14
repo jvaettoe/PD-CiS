@@ -27,17 +27,19 @@ singular piece reads a dense mixture of features.
 """
 import os
 
+from core.paths import REPO_ROOT
+
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
 
-from mlp import EmbedMLP
+from core.mlp import EmbedMLP
 
-CKPT_DIR = os.path.join(os.path.dirname(__file__), "checkpoints")
-RES_DIR = os.path.join(os.path.dirname(__file__), "results", "embedded")
-FIG_DIR = os.path.join(os.path.dirname(__file__), "figures", "embedded")
+CKPT_DIR = os.path.join(REPO_ROOT, "checkpoints")
+RES_DIR = os.path.join(REPO_ROOT, "results", "embedded")
+FIG_DIR = os.path.join(REPO_ROOT, "figures", "embedded")
 
 
 def load_embed_mlp(d_emb: int, d_mlp: int = 50, p: str = "0.001", n: str = "4",

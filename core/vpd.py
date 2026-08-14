@@ -44,7 +44,7 @@ import torch.nn.functional as F
 from torch import Tensor
 from jaxtyping import Float
 
-from pd import PD
+from core.pd import PD
 
 CI_ALIVE_THRESHOLD = 0.1   # their ci_alive_threshold
 

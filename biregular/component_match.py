@@ -41,6 +41,8 @@ biregular_vpd_compare.py):
 import argparse
 import os
 
+from core.paths import REPO_ROOT
+
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -49,11 +51,11 @@ import torch
 from scipy.optimize import linear_sum_assignment
 from torch.func import functional_call
 
-from data import CleanDataset
-from pd import PD, ExactPD
+from core.data import CleanDataset
+from core.pd import PD, ExactPD
 
-FIG_DIR = os.path.join(os.path.dirname(__file__), "figures", "comparison")
-RES_DIR = os.path.join(os.path.dirname(__file__), "results", "overview")
+FIG_DIR = os.path.join(REPO_ROOT, "figures", "comparison")
+RES_DIR = os.path.join(REPO_ROOT, "results", "overview")
 THETA = 0.5          # coverage threshold (act values are s_j-normalized; mass in [0,1])
 SPLIT_MASS = 0.25    # a feature is "split" if >1 components carry this much of it
 

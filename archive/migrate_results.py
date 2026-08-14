@@ -28,7 +28,7 @@ import os
 import re
 import shutil
 
-import results_io
+import core.results_io as results_io
 
 BASE = results_io.RESULTS_DIR
 N_DIR = results_io._n_dir(4)   # results/n4

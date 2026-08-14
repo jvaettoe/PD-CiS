@@ -16,19 +16,21 @@ headline); swap test; held-out L4 comparison vs the designed codes.
 """
 import os
 
+from core.paths import REPO_ROOT
+
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
 
-from biregular_ansatz import CodeAnsatz
-from data import CleanDataset
-from embed_exact_decomposition import load_embed_mlp
-from mlp import MLP
+from biregular.biregular_ansatz import CodeAnsatz
+from core.data import CleanDataset
+from embed.embed_exact_decomposition import load_embed_mlp
+from core.mlp import MLP
 
-RES_DIR = os.path.join(os.path.dirname(__file__), "results", "embedded", "equivalence_p0.01")
-FIG_DIR = os.path.join(os.path.dirname(__file__), "figures", "embedded", "equivalence_p0.01")
+RES_DIR = os.path.join(REPO_ROOT, "results", "embedded", "equivalence_p0.01")
+FIG_DIR = os.path.join(REPO_ROOT, "figures", "embedded", "equivalence_p0.01")
 P = 0.01
 TAU = 0.05
 SEED_EVAL = 777
@@ -38,7 +40,8 @@ SWAPS_OM = 800000
 
 def load_models():
     out = {}
-    ck = torch.load("checkpoints/ncc_MLP_d_mlp50_n_features100_p0.01_n4_s42.pt",
+    ck = torch.load(os.path.join(REPO_ROOT, "checkpoints",
+                                 "ncc_MLP_d_mlp50_n_features100_p0.01_n4_s42.pt"),
                     map_location="cpu", weights_only=False)
     m = MLP(**ck["model_config"], device="cpu")
     m.load_state_dict(ck["state_dict"])

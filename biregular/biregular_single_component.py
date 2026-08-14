@@ -18,20 +18,22 @@ overlap m = |code_j ∩ code_j'|:  r_{j'} = m*a^2 + (K-m)*a*b   (unit probe), so
 import argparse
 import os
 
+from core.paths import REPO_ROOT
+
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
 
-import biregular_ansatz as bir
-from pd import ExactPD
+import biregular.biregular_ansatz as bir
+from core.pd import ExactPD
 
 BIREG_K = 5
 SWAPS = 800000                      # overlap-min iteration budget (source repo value)
 VARIANTS = [("no-swap", 0), ("overlap-min", SWAPS)]
-FIG_BASE = os.path.join(os.path.dirname(__file__), "figures", "biregular")
-RES_DIR = os.path.join(os.path.dirname(__file__), "results", "overview")
+FIG_BASE = os.path.join(REPO_ROOT, "figures", "biregular")
+RES_DIR = os.path.join(REPO_ROOT, "results", "overview")
 
 _CODE_CACHE: dict = {}
 
