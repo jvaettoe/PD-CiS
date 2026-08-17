@@ -175,3 +175,30 @@ each model (`toys/<name>/MEMO.md`); this file records what was done and when.
   neuron basis emerges. Diagnosis: canonical config assumes TMS-like p=0.05.
 - Follow-ups running: trained model at 2,500 steps (user-requested shorter);
   designed model re-run at data p=0.05 (tests the sparsity diagnosis).
+
+## 2026-08-17 — Degeneracy diagnosed: mis-priced objective, not a bug
+- Two scrutiny subagents on the Goodfire-native degenerate run: (1) forensics —
+  collapse completed in <100 steps, never any structure; measured economics:
+  at p=0.001 coeff 3e-3, ideal-solution importance cost 6.0e-4 > max recon
+  benefit 1.2e-4, so all-CIs-zero is the GLOBAL optimum; (2) integration audit
+  — no bugs on any axis (dataset U[-1,1] verified, run_batch correct, modules
+  attached, gradients flowed); hand-built ground-truth decomposition scores
+  34x WORSE than degenerate at canonical coeffs, and predicted the p=0.05
+  rerun would also collapse (~9x). Prediction CONFIRMED (p=0.05 short run:
+  L0~0, flat mass, 0 axis-aligned).
+- User decision: no FaithfulnessLoss (delta construction IS their faithfulness
+  mechanism; adding a loss would deviate from the published method). Tuned run
+  launched strictly within their config space: coeff 1e-4 + pnorm 2.0 (their
+  own TMS 40-10 values, the correct donor for C=100) at p=0.001. Trained-model
+  leg deferred until the designed-code story is complete (user request).
+
+## 2026-08-17 — BREAKTHROUGH: tuned pricing rescues Goodfire-native decomposition
+- p=0.05 short run: still degenerate (predicted). Tuned run (coeff 1e-4,
+  pnorm 2.0 = their own TMS 40-10 values; p=0.001; canonical losses, NO
+  FaithfulnessLoss per user decision): STRUCTURE FORMS at 2,500 steps —
+  L0(0.1) 0.22/0.41, differentiated mass (8x range), 22/19 axis-aligned
+  components, sum-vs-W err down to 0.26/0.15, linear1 covering 72 features,
+  linear2 covering 44/50 neurons. Emerging ontology = feature-basis reads +
+  NEURON-basis writes — corroborating our port's asymmetry in Goodfire's own
+  unmodified pipeline. Full 10k-step tuned run launched for the definitive
+  basis readout; trained-model leg restarts (tuned coeffs) after.
