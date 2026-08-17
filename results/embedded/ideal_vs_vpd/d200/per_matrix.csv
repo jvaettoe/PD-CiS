@@ -1,0 +1,5 @@
+stage,matrix,C,n_alive,sum_rel_residual,conc_median_alive,conc_coverage_alive,hung_median_cos_alive,hung_frac_gt0.8_alive,frame_best_median_alive,frame_coverage_alive,svd_vside_median_alive,verdict
+10k,lin_emb,100,100,0.981,0.945,87,0.535,0.010,,,,
+10k,lin_in,100,100,0.450,0.462,42,0.080,0.000,0.579,86,0.294,mixed
+10k,lin_out,100,80,0.566,0.484,46,0.086,0.000,,,,
+10k,lin_unemb,100,100,0.999,0.306,60,0.060,0.000,,,,
