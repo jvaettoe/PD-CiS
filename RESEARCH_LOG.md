@@ -202,3 +202,17 @@ each model (`toys/<name>/MEMO.md`); this file records what was done and when.
   NEURON-basis writes — corroborating our port's asymmetry in Goodfire's own
   unmodified pipeline. Full 10k-step tuned run launched for the definitive
   basis readout; trained-model leg restarts (tuned coeffs) after.
+
+## 2026-08-17 — Exp 1: ExactPD inserted into the port's VPD objective (audited clean)
+- New biregular/vpd_objective.py + append-only store (results/vpd_objective/).
+- Headline (adversarially audited, no bugs, independently replicated): the
+  exact solution costs 6.4x MORE total than the learned neuron-basis fit —
+  entirely in reconstruction (9x stoch, 13x PGD), all on w_out (exact w_in
+  recon is exactly 0 by math); exact is SPARSER on importance (0.200 = 2pF vs
+  0.253). Interference ownership measured: masking inactive features' write
+  pieces deletes the leak the model emits. Implication for Exp 2: imp-up/
+  recon-down DOES favor ExactPD, break-even ~55x default ratio; sweep to
+  straddle 55x and the collapse boundary above it. Caveats: faithfulness
+  weight 0 (learned keeps a free 1.5e-4 delta); trained-CI variant deferred
+  (analytic bound: cannot close gap below ~5.8x). Two stale-import fixes
+  restored ExactPD/ci_stats on this branch (byte-identical to archive).

@@ -269,7 +269,7 @@ class VPD(PD):
           pr_mean_ci   -- participation ratio of per-component mean ci (dominance-robust
                           effective number of components)
         Each is reported per matrix and max-ed over matrices for the headline number."""
-        from data import CleanDataset
+        from core.data import CleanDataset
         ds = CleanDataset(n_features=self.model.n_features, p=float(p),
                           device=self.model.device, seed=seed)
         x, _ = ds.generate_batch(batch)

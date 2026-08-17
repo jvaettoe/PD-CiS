@@ -665,7 +665,7 @@ class ExactPD(APD):
 
     def __init__(self, model: nn.Module, C: int | None = None, rank: int = 1,
                  param_names: list[str] | None = None) -> None:
-        from mlp import MLP  # deferred: mlp imports pd (circular at module load)
+        from core.mlp import MLP  # deferred: mlp imports pd (circular at module load)
 
         n_features, d_mlp = model.n_features, model.d_mlp
         readin = model.readin().detach()    # (n_features, d_mlp)   feature-space read-in

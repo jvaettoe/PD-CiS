@@ -1,0 +1,115 @@
+{
+ "tag": "exact_oracle",
+ "timestamp": "2026-08-17T14:38:09",
+ "config": {
+  "K": 5,
+  "family": "regular",
+  "code_seed": 0,
+  "swaps": 0,
+  "decoder": "transpose",
+  "p": "0.001",
+  "ab": [
+   0.3645663261413574,
+   -0.04756719991564751
+  ],
+  "C": 100,
+  "loss_kwargs": {
+   "alpha_faithfulness": 0.0,
+   "alpha_importance": 0.0001,
+   "alpha_stoch": 2.0,
+   "alpha_pgd": 2.0,
+   "pnorm": 2.0
+  },
+  "eval_pool": {
+   "seed": 777,
+   "n_batches": 25,
+   "batch": 8192
+  },
+  "init_seed": 0,
+  "ab_source": "learned_payload",
+  "components": "exact_frozen",
+  "gates": "oracle_activity"
+ },
+ "steps": 0,
+ "losses": {
+  "total": 0.0003314637078437954,
+  "terms": {
+   "importance": {
+    "raw": 0.199794921875,
+    "weighted": 1.99794921875e-05
+   },
+   "stoch_recon": {
+    "raw": 3.8999781681923194e-05,
+    "weighted": 7.799956336384639e-05
+   },
+   "pgd_recon": {
+    "raw": 0.00011674232635414228,
+    "weighted": 0.00023348465270828456
+   },
+   "faithful": {
+    "raw": 0.0,
+    "weighted": 0.0
+   }
+  },
+  "per_matrix": {
+   "importance": {
+    "w_in": 0.0998974609375,
+    "w_out": 0.0998974609375
+   },
+   "stoch_recon": {
+    "w_in": 0.0,
+    "w_out": 5.1570940850069744e-05
+   }
+  }
+ },
+ "basis_metrics": {
+  "in": {
+   "act_purity": 1.0,
+   "act_coverage": 100,
+   "mass_purity": 1.0,
+   "match_agree": 1.0,
+   "row_entropy": 0.0,
+   "split": 0
+  },
+  "out": {
+   "act_purity": 1.0,
+   "act_coverage": 100,
+   "mass_purity": 1.0,
+   "match_agree": 1.0,
+   "row_entropy": 0.0,
+   "split": 0
+  },
+  "index_agreement": 1.0,
+  "dead_components": 0,
+  "neuron_basis": {
+   "w_in": {
+    "alive": 100,
+    "neuron_conc": 0.1734280227124691,
+    "neurons_covered": 22
+   },
+   "w_out": {
+    "alive": 100,
+    "neuron_conc": 0.1734280227124691,
+    "neurons_covered": 22
+   }
+  },
+  "ci_stats": {
+   "w_in": {
+    "ci_l0": 0.095947265625,
+    "n_alive_union": 98,
+    "pr_mean_ci": 78.5999984741211
+   },
+   "w_out": {
+    "ci_l0": 0.095947265625,
+    "n_alive_union": 98,
+    "pr_mean_ci": 78.5999984741211
+   },
+   "headline": {
+    "ci_l0": 0.095947265625,
+    "n_alive_union": 98,
+    "pr_mean_ci": 78.5999984741211
+   }
+  }
+ },
+ "checkpoint": "checkpoints/vpd_objective/exact_oracle.pt"
+}
