@@ -216,3 +216,13 @@ each model (`toys/<name>/MEMO.md`); this file records what was done and when.
   weight 0 (learned keeps a free 1.5e-4 delta); trained-CI variant deferred
   (analytic bound: cannot close gap below ~5.8x). Two stale-import fixes
   restored ExactPD/ci_stats on this branch (byte-identical to archive).
+
+## 2026-08-17 — DEFINITIVE: Goodfire-native converged run corroborates the port
+- 10k-step tuned run (coeff 1e-4, pnorm 2.0, p=0.001) converged: linear1 = 99
+  alive, conc 0.86, 85 axis-aligned, covering 90 FEATURES (per-feature reads);
+  linear2 = 62 alive, conc 0.83, 47 axis-aligned, covering 49/50 NEURONS
+  (per-neuron writes); sum-vs-W residual 0.14/0.08. Goodfire's unmodified
+  pipeline reproduces our port's asymmetric ontology: feature-basis reads,
+  neuron-basis writes. Combined with Exp 1 (exact PD costs 6.4x, all in w_out
+  interference ownership), the mechanism is fully accounted for. Next: --fit-ci
+  variant, Exp-2 pricing sweep (~55x break-even), trained-model leg (tuned).
