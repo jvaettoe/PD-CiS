@@ -12,6 +12,16 @@ weights (decomp_fit.loss_kwargs_for("VPD")):
                        (component j == feature j; the CI net is bypassed analytically)
   exact_trainedci   -- exact pieces FROZEN + CI nets trained (--fit-ci; deferred, long)
   learned_reference -- the saved 25k-step baseline VPD fit re-evaluated on the pool
+  hybrid_oracle     -- (--hybrid, eval-only) write-basis ablation: identical exact READ
+                       pieces (V_in = I, U_in = w_in) but NEURON-basis writes with all
+                       C=100 components live -- component c carries HALF of neuron row
+                       (c mod d_mlp): V_out[:, c] = e_{c mod N}, U_out[c, :] =
+                       0.5 * w_out[c mod N, :] (each neuron row split across exactly 2
+                       components; sum of pieces == w_out exactly). Oracle gates:
+                       w_in as exact_oracle; w_out ci_c = [h_{c mod N} != 0] with
+                       h = relu(x @ w_in) of the frozen model (both halves of a neuron
+                       gate together). Isolates the write-basis choice with reads, gate
+                       quality and faithfulness held fixed.
 
 Experiment 2 (pricing sweep) lives here too: --sweep-cell fits a FRESH VPD (C=100)
 to the same frozen model with the importance-minimality weight multiplied by
@@ -25,6 +35,7 @@ runs. NB the sweep's fit seed is --fit-seed (default 0); --seed stays the
 EVAL-POOL seed so every cell is scored on the same fixed pool as the variants.
 
   ./.venv/bin/python -m biregular.vpd_objective              # oracle + learned evals
+  ./.venv/bin/python -m biregular.vpd_objective --hybrid     # eval hybrid_oracle only
   ./.venv/bin/python -m biregular.vpd_objective --fit-ci     # deferred: train CI nets
   ./.venv/bin/python -m biregular.vpd_objective --index      # rebuild index.md only
   ./.venv/bin/python -m biregular.vpd_objective --sweep-cell --imp-mult 55
@@ -116,6 +127,57 @@ def build_exact_vpd(model, oracle: bool = False, init_seed: int = INIT_SEED) -> 
         for name in pd_v.param_names:
             assert torch.allclose(pd_v._component_weight(name, j),
                                   pd_e._component_weight(name, j), atol=1e-6), (name, j)
+    return pd_v
+
+
+class HybridOracleVPD(VPD):
+    """Oracle gates for the HYBRID pieces (exact reads, split-neuron writes).
+    w_in: as OracleVPD, ci_j = [x_j != 0] (component j == feature j).
+    w_out: component c carries half of neuron row (c mod d_mlp), so its importance
+    is [h_{c mod d_mlp} != 0] under the FROZEN model's hidden h = relu(x @ w_in);
+    both halves of a neuron gate together. lower == upper == the oracle gate."""
+
+    def _ci(self, e, h):
+        assert self.C == self.model.n_features, "oracle read gates need component j == feature j"
+        reps = self.C // h.shape[1]
+        assert self.C == reps * h.shape[1], "hybrid write gates need C to be a multiple of d_mlp"
+        g_in = (e != 0).float()
+        g_out = (h != 0).float().repeat(1, reps)
+        lower = {"w_in": g_in, "w_out": g_out}
+        return lower, dict(lower)
+
+
+def build_hybrid_vpd(model, init_seed: int = INIT_SEED) -> VPD:
+    """VPD state with the ExactPD READ pieces (V_in = I, U_in = w_in, identical to
+    build_exact_vpd) but split-neuron WRITE pieces: all C = F components live,
+    component c = outer(e_{c mod N}, 0.5 * w_out[c mod N, :]) in neuron space, so
+    each of the N = d_mlp neuron rows is split across exactly C/N components and
+    the pieces still tile w_out exactly (delta == 0). Frozen; eval-only."""
+    torch.manual_seed(init_seed)  # reproducible CI-net init (bypassed by the oracle)
+    pd_v = HybridOracleVPD(model, C=model.n_features, warmup_steps=0)
+    n_feat, d_mlp = model.n_features, model.d_mlp
+    reps = n_feat // d_mlp
+    assert n_feat == reps * d_mlp, f"C={n_feat} must be a multiple of d_mlp={d_mlp}"
+    eye_f = torch.eye(n_feat, device=model.device)
+    eye_n = torch.eye(d_mlp, device=model.device)
+    with torch.no_grad():
+        pd_v.V["w_in"].copy_(eye_f)                          # (F, C):  V_in[:, j] = e_j
+        pd_v.U["w_in"].copy_(model.w_in)                     # (C, N):  U_in[j, :] = w_in[j, :]
+        pd_v.V["w_out"].copy_(eye_n.repeat(1, reps))         # (N, C):  V_out[:, c] = e_{c mod N}
+        pd_v.U["w_out"].copy_(model.w_out.repeat(reps, 1) / reps)  # (C, F): half neuron rows
+    for k in pd_v.V:
+        pd_v.V[k].requires_grad_(False)
+        pd_v.U[k].requires_grad_(False)
+    for name in pd_v.param_names:                            # exact tiling: sum of pieces == W
+        err = float((pd_v._vu(name) - pd_v.targets[name]).abs().max())
+        assert err < 1e-6, f"hybrid tiling failed for {name}: max|sum - W| = {err:.3e}"
+    pd_e = ExactPD(model)                                    # reads identical to ExactPD ...
+    for j in (0, 17, 99):
+        assert torch.allclose(pd_v._component_weight("w_in", j),
+                              pd_e._component_weight("w_in", j), atol=1e-6), j
+    for c in (0, 23, 49, 50, 73, 99):                        # ... writes = half neuron rows
+        want = torch.outer(eye_n[:, c % d_mlp], model.w_out[c % d_mlp, :] / reps)
+        assert torch.allclose(pd_v._component_weight("w_out", c), want, atol=1e-6), c
     return pd_v
 
 
@@ -541,6 +603,11 @@ def main():
     ap.add_argument("--seed", type=int, default=EVAL_SEED, help="eval-pool seed")
     ap.add_argument("--batches", type=int, default=EVAL_BATCHES)
     ap.add_argument("--batch", type=int, default=EVAL_BATCH)
+    ap.add_argument("--hybrid", action="store_true",
+                    help="EVAL-ONLY write-basis ablation: exact reads + split-neuron "
+                         "writes (all C live) + oracle gates -> hybrid_oracle; prints "
+                         "a 3-way table against the SAVED exact_oracle and "
+                         "learned_reference rows")
     ap.add_argument("--fit-ci", action="store_true", dest="fit_ci",
                     help="DEFERRED variant (b): freeze exact components, train the CI "
                          "nets with the port's optimizer, then eval -> exact_trainedci")
@@ -587,6 +654,24 @@ def main():
         assert a.imp_mult is not None, "--sweep-cell requires --imp-mult R"
         rec = run_sweep_cell(a, code, model, ab, ab_source)
         print_comparison([rec])
+        return
+
+    if a.hybrid:  # write-basis ablation: exact reads + split-neuron writes (eval only)
+        pd_h = build_hybrid_vpd(model)
+        rec_h = run_variant("hybrid_oracle", pd_h, code, ab, a.p, a, steps=0,
+                            extra_cfg={"ab_source": ab_source,
+                                       "components": "hybrid_exactread_neuronwrite_frozen",
+                                       "gates": "oracle_activity_neuronwrite"})
+        recs = []
+        for tag in ("exact_oracle", "learned_reference"):  # saved rows, same pool
+            path = os.path.join(RUNS_DIR, f"{tag}.json")
+            assert os.path.exists(path), f"missing saved row {path}; run the default evals first"
+            with open(path) as f:
+                r = json.load(f)
+            assert r["config"]["eval_pool"] == rec_h["config"]["eval_pool"] \
+                and r["config"]["p"] == rec_h["config"]["p"], f"{tag}: eval pool mismatch"
+            recs.append(r)
+        print_comparison([recs[0], rec_h, recs[1]])
         return
 
     if a.fit_ci:  # variant (b): exact components frozen, CI nets trained

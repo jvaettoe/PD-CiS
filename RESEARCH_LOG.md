@@ -263,3 +263,15 @@ each model (`toys/<name>/MEMO.md`); this file records what was done and when.
   measurably harder PD target than its designed twin — the grading (the very
   thing that separates trained from designed codes in the dFH battery) is
   what breaks clean neuron-basis writes. Part A closed.
+
+## 2026-08-17 — Hybrid-oracle basis isolation (user-driven): the refined mechanism
+- New hybrid_oracle variant (100 live neuron-basis write pieces, half-row
+  each, oracle gates; reads/count/faithfulness identical to exact_oracle).
+  Result: recon EXACTLY 0 (1e-18) — kernel self-masking confirmed at float
+  precision — but imp w_out 4.78 (48x exact); at default pricing hard-gated
+  neuron basis LOSES to hard-gated exact (4.88e-4 vs 3.31e-4). Learned
+  reference (5.17e-5) beats both via SOFT gates (act_out 0.10, imp 0.187).
+  REFINED CLAIM: recon+PGD is un-cheatable, importance is soft-discountable;
+  training selects the basis whose cost lives in the discountable term
+  (neurons) and discounts it. The naive "neuron basis wins under oracle
+  gates" is FALSE — user skepticism exposed this. All legs now measured.
