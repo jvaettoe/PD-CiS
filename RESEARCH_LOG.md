@@ -285,3 +285,13 @@ each model (`toys/<name>/MEMO.md`); this file records what was done and when.
   attractor from the neuron-basis configuration — recovery confirmed at loss
   AND component level. Controlled pair: exact-basis trained gates stall at
   3.582e-4. vpd_objective store now: 6 variants, one eval pool.
+
+## 2026-08-17 — Embedded ideal-vs-VPD: Part 1 built, runs launched
+- Designed sandwich W_e -> C(K=5, transpose) -> W_e^T at d_emb {200, 50};
+  all asserts pass (d200 forward == plain code 8e-7; d50 eff == G*C, mean
+  G_jj = 0.500 = d/F). Ideal PD stored (W_emb rows; W_in full SVD; tied
+  transposes). SURPRISE: uniform/DC direction is an EXACT singular pair
+  (closed form to 1e-16) but ranks 49/50 — negative b cancels DC mass.
+  Loading matrix dense at d200 (max |L| 0.34): SVD frame vs embedded-feature
+  frame maximally distinguishable. param-decomp 4-Linear experiment added,
+  smokes clean (1.5/1.9 it/s); four-leg run chain launched (~7 h).
