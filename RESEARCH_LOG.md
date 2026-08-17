@@ -164,3 +164,14 @@ each model (`toys/<name>/MEMO.md`); this file records what was done and when.
 - Smoke decompositions (250 steps) of both models ran clean end-to-end.
   Full 10k-step runs launched; readout (alive counts, write-side basis
   structure vs our port's 53-alive/per-neuron result) to follow.
+
+## 2026-08-17 — Goodfire-native run on designed K=5 model: no-op at p=0.001
+- Full 10k-step param-decomp run (67h CPU) on the designed model at data
+  p=0.001 converged to a DEGENERATE solution: sum-of-components misses W by
+  37-58% (runtime delta carries the model), flat mass spectrum, 0/200
+  components axis-aligned in either layer; recon losses fine (trivially — ~90%
+  of p=0.001 batches are all-zero, so importance-minimality gates everything
+  off into the delta). Neither ExactPD's feature basis nor our port's
+  neuron basis emerges. Diagnosis: canonical config assumes TMS-like p=0.05.
+- Follow-ups running: trained model at 2,500 steps (user-requested shorter);
+  designed model re-run at data p=0.05 (tests the sparsity diagnosis).
