@@ -275,3 +275,13 @@ each model (`toys/<name>/MEMO.md`); this file records what was done and when.
   training selects the basis whose cost lives in the discountable term
   (neurons) and discounts it. The naive "neuron basis wins under oracle
   gates" is FALSE — user skepticism exposed this. All legs now measured.
+
+## 2026-08-17 — B-to-C recovery test complete (user-designed)
+- Gates-only on frozen hybrid pieces: 2.615e-4 — does NOT recover C (5x gap);
+  piece co-adaptation required (earlier gates-suffice claim corrected).
+- FULL training from hybrid init: total 5.146e-5 = 0.995x C; write pieces
+  collapse 100 half-rows -> 50 alive, matched to C at median cos 0.998,
+  100% neuron-slot agreement; read side same basin (cos 0.878). C is the
+  attractor from the neuron-basis configuration — recovery confirmed at loss
+  AND component level. Controlled pair: exact-basis trained gates stall at
+  3.582e-4. vpd_objective store now: 6 variants, one eval pool.

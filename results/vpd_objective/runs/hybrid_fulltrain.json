@@ -1,0 +1,221 @@
+{
+ "tag": "hybrid_fulltrain",
+ "timestamp": "2026-08-17T20:21:49",
+ "config": {
+  "K": 5,
+  "family": "regular",
+  "code_seed": 0,
+  "swaps": 0,
+  "decoder": "transpose",
+  "p": "0.001",
+  "ab": [
+   0.3645663261413574,
+   -0.04756719991564751
+  ],
+  "C": 100,
+  "loss_kwargs": {
+   "alpha_faithfulness": 0.0,
+   "alpha_importance": 0.0001,
+   "alpha_stoch": 2.0,
+   "alpha_pgd": 2.0,
+   "pnorm": 2.0
+  },
+  "eval_pool": {
+   "seed": 777,
+   "n_batches": 25,
+   "batch": 8192
+  },
+  "init_seed": 0,
+  "ab_source": "learned_payload",
+  "components": "hybrid_init_fulltrain",
+  "gates": "learned_ci",
+  "fit_seed": 31337
+ },
+ "steps": 25000,
+ "losses": {
+  "total": 5.146200870512985e-05,
+  "terms": {
+   "importance": {
+    "raw": 0.25267716944217683,
+    "weighted": 2.5267716944217685e-05
+   },
+   "stoch_recon": {
+    "raw": 4.323582506913226e-06,
+    "weighted": 8.647165013826453e-06
+   },
+   "pgd_recon": {
+    "raw": 8.77356382261496e-06,
+    "weighted": 1.754712764522992e-05
+   },
+   "faithful": {
+    "raw": 0.00015734296175651252,
+    "weighted": 0.0
+   }
+  },
+  "per_matrix": {
+   "importance": {
+    "w_in": 0.06462312147021293,
+    "w_out": 0.18805404961109162
+   },
+   "stoch_recon": {
+    "w_in": 3.0426489320234395e-06,
+    "w_out": 3.334872408231604e-06
+   }
+  }
+ },
+ "basis_metrics": {
+  "in": {
+   "act_purity": 0.8881487846374512,
+   "act_coverage": 90,
+   "mass_purity": 0.8387454748153687,
+   "match_agree": 0.94,
+   "row_entropy": 0.5123794674873352,
+   "split": 5
+  },
+  "out": {
+   "act_purity": 0.1008608415722847,
+   "act_coverage": 0,
+   "mass_purity": 0.04724026843905449,
+   "match_agree": 0.09,
+   "row_entropy": 3.4952728748321533,
+   "split": 0
+  },
+  "index_agreement": 0.0,
+  "dead_components": 0,
+  "neuron_basis": {
+   "w_in": {
+    "alive": 100,
+    "neuron_conc": 0.20084635697305203,
+    "neurons_covered": 44
+   },
+   "w_out": {
+    "alive": 100,
+    "neuron_conc": 0.8459884077310562,
+    "neurons_covered": 50
+   }
+  },
+  "ci_stats": {
+   "w_in": {
+    "ci_l0": 0.12353515625,
+    "n_alive_union": 98,
+    "pr_mean_ci": 70.35789489746094
+   },
+   "w_out": {
+    "ci_l0": 0.365234375,
+    "n_alive_union": 52,
+    "pr_mean_ci": 48.58793258666992
+   },
+   "headline": {
+    "ci_l0": 0.365234375,
+    "n_alive_union": 98,
+    "pr_mean_ci": 70.35789489746094
+   }
+  }
+ },
+ "sweep_basis": {
+  "F": 100,
+  "d_mlp": 50,
+  "alive_frac": 0.1,
+  "read": {
+   "alive": 99,
+   "feature_conc": {
+    "min": 0.32167118787765503,
+    "median": 0.9811111092567444,
+    "mean": 0.9185012578964233,
+    "max": 0.998628556728363
+   },
+   "feature_coverage": 93
+  },
+  "write_neuron": {
+   "alive": 50,
+   "neuron_conc": {
+    "min": 0.9956251382827759,
+    "median": 0.9983894228935242,
+    "mean": 0.9982171058654785,
+    "max": 0.9991112947463989
+   },
+   "neuron_coverage": 50
+  },
+  "write_feature": {
+   "u_row_feature_conc": {
+    "min": 0.29355210065841675,
+    "median": 0.29680967330932617,
+    "mean": 0.29664111137390137,
+    "max": 0.2989490032196045
+   },
+   "vcol_wout_cos": {
+    "min": 0.42226317524909973,
+    "median": 0.43191012740135193,
+    "mean": 0.43240606784820557,
+    "max": 0.44991055130958557
+   },
+   "feature_coverage": 40
+  },
+  "verdict": "neuron_basis",
+  "verdict_thresholds": {
+   "alive_frac": 0.1,
+   "collapsed_alive_out_frac_dmlp": 0.5,
+   "collapsed_alive_in_frac_F": 0.5,
+   "conc_hi": 0.8,
+   "coverage_frac": 0.8
+  }
+ },
+ "checkpoint": "checkpoints/vpd_objective/hybrid_fulltrain.pt",
+ "recovery_vs_learned": {
+  "note": "learned_reference (C) came from a DIFFERENT init/seed, so 'recovers C' means same basin/structure (matched rank-1 directions), not identical tensors; criteria are heuristics, not gospel.",
+  "alive_frac": 0.1,
+  "w_in": {
+   "matched_cos_all": {
+    "min": 0.00016370744560845196,
+    "median": 0.8776867389678955,
+    "mean": 0.7671636939048767,
+    "max": 0.9958736300468445
+   },
+   "matched_cos_alive_both": {
+    "min": 0.00016370744560845196,
+    "median": 0.8782975673675537,
+    "mean": 0.7742438912391663,
+    "max": 0.9958736300468445
+   },
+   "alive_b": 99,
+   "alive_c": 100,
+   "n_alive_both_pairs": 99
+  },
+  "w_out": {
+   "matched_cos_all": {
+    "min": 0.04531177878379822,
+    "median": 0.2952856421470642,
+    "mean": 0.5616049766540527,
+    "max": 0.9993617534637451
+   },
+   "matched_cos_alive_both": {
+    "min": 0.9928807616233826,
+    "median": 0.9983130693435669,
+    "mean": 0.9978365898132324,
+    "max": 0.9993617534637451
+   },
+   "alive_b": 50,
+   "alive_c": 50,
+   "n_alive_both_pairs": 50,
+   "neuron_slot_agreement": 1.0,
+   "neuron_slots_b": 50,
+   "neuron_slots_c": 50
+  },
+  "criteria": {
+   "total_within_15pct_of_C": {
+    "pass": true,
+    "ratio_B_over_C": 0.994726905051657
+   },
+   "write_neuron_aligned": {
+    "pass": true,
+    "neuron_conc_mean": 0.9982171058654785,
+    "neuron_coverage": 50
+   },
+   "matched_write_cos_median": {
+    "pass": true,
+    "median": 0.9983130693435669
+   },
+   "note": "learned_reference (C) came from a DIFFERENT init/seed, so 'recovers C' means same basin/structure (matched rank-1 directions), not identical tensors; criteria are heuristics, not gospel."
+  }
+ }
+}

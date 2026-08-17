@@ -1,0 +1,140 @@
+{
+ "tag": "hybrid_trainedci",
+ "timestamp": "2026-08-17T20:04:42",
+ "config": {
+  "K": 5,
+  "family": "regular",
+  "code_seed": 0,
+  "swaps": 0,
+  "decoder": "transpose",
+  "p": "0.001",
+  "ab": [
+   0.3645663261413574,
+   -0.04756719991564751
+  ],
+  "C": 100,
+  "loss_kwargs": {
+   "alpha_faithfulness": 0.0,
+   "alpha_importance": 0.0001,
+   "alpha_stoch": 2.0,
+   "alpha_pgd": 2.0,
+   "pnorm": 2.0
+  },
+  "eval_pool": {
+   "seed": 777,
+   "n_batches": 25,
+   "batch": 8192
+  },
+  "init_seed": 0,
+  "ab_source": "learned_payload",
+  "components": "hybrid_exactread_neuronwrite_frozen",
+  "gates": "trained_ci",
+  "ci_fit_seed": 31337
+ },
+ "steps": 4000,
+ "losses": {
+  "total": 0.0002615268377121538,
+  "terms": {
+   "importance": {
+    "raw": 0.31831719040870665,
+    "weighted": 3.183171904087067e-05
+   },
+   "stoch_recon": {
+    "raw": 3.0540159568772653e-05,
+    "weighted": 6.108031913754531e-05
+   },
+   "pgd_recon": {
+    "raw": 8.430740010226145e-05,
+    "weighted": 0.0001686148002045229
+   },
+   "faithful": {
+    "raw": 0.0,
+    "weighted": 0.0
+   }
+  },
+  "per_matrix": {
+   "importance": {
+    "w_in": 0.030054254308342934,
+    "w_out": 0.2882629358768463
+   },
+   "stoch_recon": {
+    "w_in": 3.46367628662847e-05,
+    "w_out": 4.7879818339424675e-06
+   }
+  }
+ },
+ "basis_metrics": {
+  "in": {
+   "act_purity": 1.0,
+   "act_coverage": 100,
+   "mass_purity": 1.0,
+   "match_agree": 1.0,
+   "row_entropy": 0.0,
+   "split": 0
+  },
+  "out": {
+   "act_purity": 0.10000003129243851,
+   "act_coverage": 0,
+   "mass_purity": 0.086714006960392,
+   "match_agree": 1.0,
+   "row_entropy": 2.9862945079803467,
+   "split": 0
+  },
+  "index_agreement": 0.03,
+  "dead_components": 0,
+  "neuron_basis": {
+   "w_in": {
+    "alive": 100,
+    "neuron_conc": 0.1734280227124691,
+    "neurons_covered": 22
+   },
+   "w_out": {
+    "alive": 100,
+    "neuron_conc": 1.0,
+    "neurons_covered": 50
+   }
+  },
+  "ci_stats": {
+   "w_in": {
+    "ci_l0": 0.224853515625,
+    "n_alive_union": 98,
+    "pr_mean_ci": 76.66807556152344
+   },
+   "w_out": {
+    "ci_l0": 0.667236328125,
+    "n_alive_union": 100,
+    "pr_mean_ci": 96.2081069946289
+   },
+   "headline": {
+    "ci_l0": 0.667236328125,
+    "n_alive_union": 100,
+    "pr_mean_ci": 96.2081069946289
+   }
+  }
+ },
+ "checkpoint": "checkpoints/vpd_objective/hybrid_trainedci.pt",
+ "ci_probe_vs_learned": {
+  "probe": "single-feature identity batch, value 1.0",
+  "jaccard_threshold": 0.1,
+  "w_in": {
+   "matched_cos_nonzero_both": {
+    "min": 0.05399288982152939,
+    "median": 0.5398580431938171,
+    "mean": 0.5042703151702881,
+    "max": 0.9021199941635132
+   },
+   "n_nonzero_both_pairs": 100,
+   "jaccard_mean_nonzero_both": 0.0943707823753357
+  },
+  "w_out": {
+   "matched_cos_nonzero_both": {
+    "min": 0.260059654712677,
+    "median": 0.9550719857215881,
+    "mean": 0.6533021926879883,
+    "max": 0.9912104606628418
+   },
+   "n_nonzero_both_pairs": 98,
+   "jaccard_mean_nonzero_both": 0.23730744421482086
+  }
+ }
+}

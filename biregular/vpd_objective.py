@@ -22,6 +22,19 @@ weights (decomp_fit.loss_kwargs_for("VPD")):
                        h = relu(x @ w_in) of the frozen model (both halves of a neuron
                        gate together). Isolates the write-basis choice with reads, gate
                        quality and faithfulness held fixed.
+  hybrid_trainedci  -- (--hybrid --fit-ci) the same frozen hybrid pieces with the CI
+                       nets TRAINED (port optimizer, --ci-steps), parallel to
+                       exact_trainedci: can learned gates price the neuron write basis
+                       down to the learned_reference total?
+  hybrid_fulltrain  -- (--hybrid-full) initialize AT the hybrid configuration but make
+                       everything trainable (components + fresh CI nets) and run the
+                       port's standard full recipe (--full-steps, default 25k, default
+                       weights, METHOD_LR). The record carries recovery_vs_learned:
+                       Hungarian |cos| matching of rank-1 pieces to learned_reference
+                       per matrix, per-neuron write-slot agreement, and heuristic
+                       pass/fail criteria (see recovery_criteria). --gates-compare
+                       post-hoc compares hybrid_trainedci's learned CI behavior to
+                       learned_reference's on single-feature probes.
 
 Experiment 2 (pricing sweep) lives here too: --sweep-cell fits a FRESH VPD (C=100)
 to the same frozen model with the importance-minimality weight multiplied by
@@ -37,6 +50,7 @@ EVAL-POOL seed so every cell is scored on the same fixed pool as the variants.
   ./.venv/bin/python -m biregular.vpd_objective              # oracle + learned evals
   ./.venv/bin/python -m biregular.vpd_objective --hybrid     # eval hybrid_oracle only
   ./.venv/bin/python -m biregular.vpd_objective --fit-ci     # deferred: train CI nets
+  ./.venv/bin/python -m biregular.vpd_objective --hybrid --fit-ci  # hybrid_trainedci
   ./.venv/bin/python -m biregular.vpd_objective --index      # rebuild index.md only
   ./.venv/bin/python -m biregular.vpd_objective --sweep-cell --imp-mult 55
   ./.venv/bin/python -m biregular.vpd_objective --phase-figure
@@ -147,14 +161,17 @@ class HybridOracleVPD(VPD):
         return lower, dict(lower)
 
 
-def build_hybrid_vpd(model, init_seed: int = INIT_SEED) -> VPD:
+def build_hybrid_vpd(model, oracle: bool = False, init_seed: int = INIT_SEED) -> VPD:
     """VPD state with the ExactPD READ pieces (V_in = I, U_in = w_in, identical to
     build_exact_vpd) but split-neuron WRITE pieces: all C = F components live,
     component c = outer(e_{c mod N}, 0.5 * w_out[c mod N, :]) in neuron space, so
     each of the N = d_mlp neuron rows is split across exactly C/N components and
-    the pieces still tile w_out exactly (delta == 0). Frozen; eval-only."""
-    torch.manual_seed(init_seed)  # reproducible CI-net init (bypassed by the oracle)
-    pd_v = HybridOracleVPD(model, C=model.n_features, warmup_steps=0)
+    the pieces still tile w_out exactly (delta == 0). Components always frozen;
+    oracle=True bypasses the CI nets, oracle=False leaves them trainable
+    (the hybrid_trainedci setting, parallel to build_exact_vpd(oracle=False))."""
+    torch.manual_seed(init_seed)  # reproducible CI-net init
+    cls = HybridOracleVPD if oracle else VPD
+    pd_v = cls(model, C=model.n_features, warmup_steps=0)
     n_feat, d_mlp = model.n_features, model.d_mlp
     reps = n_feat // d_mlp
     assert n_feat == reps * d_mlp, f"C={n_feat} must be a multiple of d_mlp={d_mlp}"
@@ -353,6 +370,117 @@ def sweep_basis_metrics(pd_v: VPD) -> dict:
     return {"F": n_feat, "d_mlp": d_mlp, "alive_frac": SWEEP_ALIVE_FRAC,
             "read": read, "write_neuron": write_neuron, "write_feature": write_feature,
             "verdict": verdict, "verdict_thresholds": dict(th)}
+
+
+# ------------------------------------------- endpoint-vs-learned recovery (B vs C)
+
+RECOVERY_NOTE = ("learned_reference (C) came from a DIFFERENT init/seed, so 'recovers C' "
+                 "means same basin/structure (matched rank-1 directions), not identical "
+                 "tensors; criteria are heuristics, not gospel.")
+
+
+def _alive_mask(pd_v: VPD, name: str) -> torch.Tensor:
+    """Component Frobenius mass > SWEEP_ALIVE_FRAC * side max (as sweep_basis_metrics)."""
+    key = pd_v._key(name)
+    mass = pd_v.V[key].norm(dim=0) * pd_v.U[key].norm(dim=1)
+    return mass > SWEEP_ALIVE_FRAC * mass.max().clamp_min(1e-12)
+
+
+def _piece_cosines(pd_b: VPD, pd_c: VPD, name: str) -> torch.Tensor:
+    """(C_b, C_c) |cos| between flattened rank-1 pieces of matrix `name`:
+    cos(outer(vb,ub), outer(vc,uc)) = cos(vb,vc) * cos(ub,uc)."""
+    eps = 1e-12
+    kb, kc = pd_b._key(name), pd_c._key(name)
+    vb = pd_b.V[kb] / pd_b.V[kb].norm(dim=0, keepdim=True).clamp_min(eps)
+    vc = pd_c.V[kc] / pd_c.V[kc].norm(dim=0, keepdim=True).clamp_min(eps)
+    ub = pd_b.U[kb] / pd_b.U[kb].norm(dim=1, keepdim=True).clamp_min(eps)
+    uc = pd_c.U[kc] / pd_c.U[kc].norm(dim=1, keepdim=True).clamp_min(eps)
+    return ((vb.T @ vc) * (ub @ uc.T)).abs()
+
+
+def recovery_vs_learned(pd_b: VPD, pd_c: VPD) -> dict:
+    """Component-level recovery of C's structure by the B endpoint: Hungarian match on
+    the rank-1-piece |cos| matrix per matrix (read pieces = w_in, write pieces = w_out),
+    matched-cosine stats over ALL pairs and over pairs alive on both sides, alive
+    counts, and per-neuron write-slot agreement (argmax|V_out| of matched alive pairs)."""
+    out = {"note": RECOVERY_NOTE, "alive_frac": SWEEP_ALIVE_FRAC}
+    with torch.no_grad():
+        for name in pd_b.param_names:
+            cos = _piece_cosines(pd_b, pd_c, name)                    # (C_b, C_c)
+            match = hungarian_match(cos.detach().cpu().numpy())       # {c_C -> c_B}
+            alive_b, alive_c = _alive_mask(pd_b, name), _alive_mask(pd_c, name)
+            pairs = [(match[j], j) for j in range(pd_c.C)]
+            vals = torch.tensor([float(cos[b, c]) for b, c in pairs])
+            both = torch.tensor([bool(alive_b[b] and alive_c[c]) for b, c in pairs])
+            out[name] = {"matched_cos_all": _stats(vals),
+                         "matched_cos_alive_both": _stats(vals[both]),
+                         "alive_b": int(alive_b.sum()), "alive_c": int(alive_c.sum()),
+                         "n_alive_both_pairs": int(both.sum())}
+            if name == "w_out":  # per-neuron write-slot agreement over alive pairs
+                nb = pd_b.V[pd_b._key(name)].abs().argmax(dim=0)
+                nc = pd_c.V[pd_c._key(name)].abs().argmax(dim=0)
+                agree = [int(nb[b]) == int(nc[c])
+                         for (b, c), ok in zip(pairs, both.tolist()) if ok]
+                out[name]["neuron_slot_agreement"] = (
+                    float(sum(agree)) / max(len(agree), 1))
+                out[name]["neuron_slots_b"] = len(
+                    {int(n) for n, ok in zip(nb.tolist(), alive_b.tolist()) if ok})
+                out[name]["neuron_slots_c"] = len(
+                    {int(n) for n, ok in zip(nc.tolist(), alive_c.tolist()) if ok})
+    return out
+
+
+def recovery_criteria(total_b: float, total_c: float, sweep_b: dict, rec: dict) -> dict:
+    """Heuristic pass/fail (stated verbatim in the record): total within ~15% of C;
+    write pieces neuron-aligned (conc > 0.8, >= 45 neurons covered); matched write-piece
+    |cos| median > 0.8 over pairs alive on both sides."""
+    wn = sweep_b["write_neuron"]
+    med = rec["w_out"]["matched_cos_alive_both"]["median"]
+    return {
+        "total_within_15pct_of_C": {"pass": bool(total_b <= 1.15 * total_c),
+                                    "ratio_B_over_C": total_b / total_c},
+        "write_neuron_aligned": {"pass": bool(wn["neuron_conc"]["mean"] > 0.8
+                                              and wn["neuron_coverage"] >= 45),
+                                 "neuron_conc_mean": wn["neuron_conc"]["mean"],
+                                 "neuron_coverage": wn["neuron_coverage"]},
+        "matched_write_cos_median": {"pass": bool(med > 0.8), "median": med},
+        "note": RECOVERY_NOTE}
+
+
+def ci_probe_comparison(pd_b: VPD, pd_c: VPD) -> dict:
+    """Gates-only comparison on single-feature probes x = e_j (j = 0..F-1, value 1.0):
+    per matrix, each component's CI pattern is the F-vector of its lower-CI over the
+    probes; Hungarian match on pattern |cos| between B's and C's components, matched
+    cosine stats (over pairs where both patterns are nonzero), and the mean Jaccard of
+    the thresholded (ci > CI_ALIVE_THRESHOLD) patterns over those matched pairs."""
+    from core.vpd import CI_ALIVE_THRESHOLD
+    model = pd_b.model
+    eps = 1e-12
+    X = torch.eye(model.n_features, device=model.device)
+    out = {"probe": "single-feature identity batch, value 1.0",
+           "jaccard_threshold": CI_ALIVE_THRESHOLD}
+    with torch.no_grad():
+        e = model.embed_input(X)
+        h = torch.relu(e @ pd_b.targets["w_in"])
+        lb, _ = pd_b._ci(e, h)
+        lc, _ = pd_c._ci(e, h)
+        for name in pd_b.param_names:
+            A, Bm = lb[name], lc[name]                                # (F, C)
+            na, nb_ = A.norm(dim=0), Bm.norm(dim=0)
+            cos = ((A / na.clamp_min(eps)).T @ (Bm / nb_.clamp_min(eps))).abs()
+            match = hungarian_match(cos.detach().cpu().numpy())       # {c_C -> c_B}
+            pairs = [(match[j], j) for j in range(pd_c.C)]
+            ok = torch.tensor([bool(na[b] > eps and nb_[c] > eps) for b, c in pairs])
+            vals = torch.tensor([float(cos[b, c]) for b, c in pairs])
+            Ab, Bb = A > CI_ALIVE_THRESHOLD, Bm > CI_ALIVE_THRESHOLD
+            jac = torch.tensor(
+                [float((Ab[:, b] & Bb[:, c]).sum()) /
+                 max(float((Ab[:, b] | Bb[:, c]).sum()), 1.0) for b, c in pairs])
+            out[name] = {"matched_cos_nonzero_both": _stats(vals[ok]),
+                         "n_nonzero_both_pairs": int(ok.sum()),
+                         "jaccard_mean_nonzero_both": float(jac[ok].mean())
+                         if bool(ok.any()) else float("nan")}
+    return out
 
 
 # ---------------------------------------------------------------- storage
@@ -608,6 +736,17 @@ def main():
                          "writes (all C live) + oracle gates -> hybrid_oracle; prints "
                          "a 3-way table against the SAVED exact_oracle and "
                          "learned_reference rows")
+    ap.add_argument("--hybrid-full", action="store_true", dest="hybrid_full",
+                    help="hybrid_fulltrain: init AT the hybrid configuration, train "
+                         "EVERYTHING (components + fresh CI nets) with the standard "
+                         "full recipe (--full-steps), eval + component-level recovery "
+                         "vs learned_reference")
+    ap.add_argument("--full-steps", type=int, default=25_000, dest="full_steps",
+                    help="hybrid_fulltrain fit steps (25000 = the full reference recipe)")
+    ap.add_argument("--gates-compare", action="store_true", dest="gates_compare",
+                    help="post-hoc: compare hybrid_trainedci's learned CI behavior to "
+                         "learned_reference's on single-feature probes (no training); "
+                         "patches the hybrid_trainedci JSON with ci_probe_vs_learned")
     ap.add_argument("--fit-ci", action="store_true", dest="fit_ci",
                     help="DEFERRED variant (b): freeze exact components, train the CI "
                          "nets with the port's optimizer, then eval -> exact_trainedci")
@@ -656,8 +795,69 @@ def main():
         print_comparison([rec])
         return
 
-    if a.hybrid:  # write-basis ablation: exact reads + split-neuron writes (eval only)
-        pd_h = build_hybrid_vpd(model)
+    if a.gates_compare:  # post-hoc gates-only probe: hybrid_trainedci CI vs learned CI
+        ckpt = os.path.join(CKPT_DIR, "hybrid_trainedci.pt")
+        assert os.path.exists(ckpt), f"no {ckpt}; run --hybrid --fit-ci first"
+        pd_b = build_hybrid_vpd(model)
+        pd_b.load_state_dict(torch.load(ckpt, map_location=a.device,
+                                        weights_only=False)["pd_state"], strict=False)
+        _, pd_l, _ = load_learned(code, a.p, a.device)
+        probe = ci_probe_comparison(pd_b, pd_l)
+        rec_path = os.path.join(RUNS_DIR, "hybrid_trainedci.json")
+        with open(rec_path) as f:
+            rec = json.load(f)
+        rec["ci_probe_vs_learned"] = probe
+        with open(rec_path, "w") as f:
+            json.dump(rec, f, indent=1)
+        print(f"  patched {rec_path} with ci_probe_vs_learned")
+        for name in ("w_in", "w_out"):
+            s = probe[name]
+            print(f"  {name}: matched-CI-pattern |cos| (both nonzero, "
+                  f"n={s['n_nonzero_both_pairs']}) median {s['matched_cos_nonzero_both']['median']:.3f} "
+                  f"mean {s['matched_cos_nonzero_both']['mean']:.3f} "
+                  f"min {s['matched_cos_nonzero_both']['min']:.3f}  "
+                  f"jaccard@{probe['jaccard_threshold']} {s['jaccard_mean_nonzero_both']:.3f}")
+        return
+
+    if a.hybrid_full:  # hybrid init, everything trainable, standard full recipe
+        pd_v = build_hybrid_vpd(model)  # frozen pieces + fresh CI init ...
+        for k in pd_v.V:                # ... then unfreeze the components
+            pd_v.V[k].requires_grad_(True)
+            pd_v.U[k].requires_grad_(True)
+        n_train = sum(p_.numel() for p_ in pd_v.parameters() if p_.requires_grad)
+        print(f"  hybrid_fulltrain: training everything ({n_train} params, "
+              f"{a.full_steps} steps, lr {decomp_fit.METHOD_LR['VPD']})")
+        decomp_fit.fit_decomposition(
+            pd_v, CleanDataset(n_features=F, p=float(a.p), device=a.device,
+                               seed=FIT_SEED),
+            steps=a.full_steps, loss_kwargs=DEFAULT_KW, seed=FIT_SEED,
+            desc=f"hybrid_fulltrain p={a.p}")
+        sweep = sweep_basis_metrics(pd_v)
+        print(f"  endpoint verdict={sweep['verdict']}  alive(in/out)="
+              f"{sweep['read']['alive']}/{sweep['write_neuron']['alive']}")
+        rec = run_variant("hybrid_fulltrain", pd_v, code, ab, a.p, a,
+                          steps=a.full_steps,
+                          extra_cfg={"ab_source": ab_source,
+                                     "components": "hybrid_init_fulltrain",
+                                     "gates": "learned_ci", "fit_seed": FIT_SEED},
+                          extra_record={"sweep_basis": sweep})
+        _, pd_l, _ = load_learned(code, a.p, a.device)
+        with open(os.path.join(RUNS_DIR, "learned_reference.json")) as f:
+            rec_c = json.load(f)
+        recov = recovery_vs_learned(pd_v, pd_l)
+        recov["criteria"] = recovery_criteria(rec["losses"]["total"],
+                                              rec_c["losses"]["total"], sweep, recov)
+        rec["recovery_vs_learned"] = recov
+        with open(os.path.join(RUNS_DIR, "hybrid_fulltrain.json"), "w") as f:
+            json.dump(rec, f, indent=1)
+        print("  recovery criteria: " + "  ".join(
+            f"{k}={'PASS' if v['pass'] else 'FAIL'}"
+            for k, v in recov["criteria"].items() if isinstance(v, dict)))
+        print_comparison([rec, rec_c])
+        return
+
+    if a.hybrid and not a.fit_ci:  # write-basis ablation, oracle gates (eval only)
+        pd_h = build_hybrid_vpd(model, oracle=True)
         rec_h = run_variant("hybrid_oracle", pd_h, code, ab, a.p, a, steps=0,
                             extra_cfg={"ab_source": ab_source,
                                        "components": "hybrid_exactread_neuronwrite_frozen",
@@ -674,18 +874,24 @@ def main():
         print_comparison([recs[0], rec_h, recs[1]])
         return
 
-    if a.fit_ci:  # variant (b): exact components frozen, CI nets trained
-        pd_v = build_exact_vpd(model)
+    if a.fit_ci:  # variant (b): frozen components (exact, or hybrid with --hybrid),
+        # CI nets trained with the port's standard optimizer
+        if a.hybrid:
+            tag, comp_cfg = "hybrid_trainedci", "hybrid_exactread_neuronwrite_frozen"
+            pd_v = build_hybrid_vpd(model)
+        else:
+            tag, comp_cfg = "exact_trainedci", "exact_frozen"
+            pd_v = build_exact_vpd(model)
         n_train = sum(p_.numel() for p_ in pd_v.parameters() if p_.requires_grad)
-        print(f"  exact_trainedci: training CI nets only ({n_train} params, "
+        print(f"  {tag}: training CI nets only ({n_train} params, "
               f"{a.ci_steps} steps, lr {decomp_fit.METHOD_LR['VPD']})")
         decomp_fit.fit_decomposition(
             pd_v, CleanDataset(n_features=F, p=float(a.p), device=a.device,
                                seed=FIT_SEED),
             steps=a.ci_steps, loss_kwargs=DEFAULT_KW, seed=FIT_SEED,
-            desc=f"exact_trainedci p={a.p}")
-        rec = run_variant("exact_trainedci", pd_v, code, ab, a.p, a, steps=a.ci_steps,
-                          extra_cfg={"ab_source": ab_source, "components": "exact_frozen",
+            desc=f"{tag} p={a.p}")
+        rec = run_variant(tag, pd_v, code, ab, a.p, a, steps=a.ci_steps,
+                          extra_cfg={"ab_source": ab_source, "components": comp_cfg,
                                      "gates": "trained_ci", "ci_fit_seed": FIT_SEED})
         print_comparison([rec])
         return
