@@ -226,3 +226,15 @@ each model (`toys/<name>/MEMO.md`); this file records what was done and when.
   neuron-basis writes. Combined with Exp 1 (exact PD costs 6.4x, all in w_out
   interference ownership), the mechanism is fully accounted for. Next: --fit-ci
   variant, Exp-2 pricing sweep (~55x break-even), trained-model leg (tuned).
+
+## 2026-08-17 — Warm-restart consolidation: Goodfire-native converges to 50 neuron writes
+- +10k warm restart (env-hook resume in our experiment script): linear2 62->50
+  alive (splits 10->1, conc 0.98, 49/50 axes), linear1 99 alive conc 0.95
+  (95 feature axes). The 12 extras were unablated transients (earlier
+  "stable row-split" inference retracted). FINAL designed-code corroboration:
+  ~99 feature reads + 50 neuron writes — identical ontology to our port
+  (53->50). Also established: scalar layerwise CI (components.py:435, 1->16->1
+  per-component MLPs) is a design choice reinforcing the input-basis
+  preference, but Exp-1's oracle-gate result shows the neuron-basis write
+  optimum follows from the IDEAL objective (interference ownership) — gate
+  architecture is separable. Candidate Exp-3: rerun under ci mode "global".
