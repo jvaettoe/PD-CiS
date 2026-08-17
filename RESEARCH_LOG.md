@@ -251,3 +251,15 @@ each model (`toys/<name>/MEMO.md`); this file records what was done and when.
   {10,30} are the natural follow-up. Phase diagram:
   figures/vpd_objective/phase_diagram.png. Trained-model Goodfire leg still
   running.
+
+## 2026-08-17 — Trained-model Goodfire leg complete (Part A closed)
+- 10k tuned + 10k warm restart. Read side: PERFECT per-feature basis (100
+  alive, conc 0.99, 99/100 aligned, 100 axes, 0 splits). Write side: STABLY
+  DISTRIBUTED — warm restart consolidated nothing (92->90 alive, conc 0.44
+  unchanged, 45 neuron axes, 34 split slots, ~2 pieces/neuron). Unlike the
+  designed model (62->50 clean neuron rows), the trained model's graded
+  per-connection write weights do NOT reduce to 50 neuron slices: VPD's
+  converged write ontology is ~90 sub-row pieces. The trained model is a
+  measurably harder PD target than its designed twin — the grading (the very
+  thing that separates trained from designed codes in the dFH battery) is
+  what breaks clean neuron-basis writes. Part A closed.
