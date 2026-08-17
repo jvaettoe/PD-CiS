@@ -13,13 +13,22 @@ weights (decomp_fit.loss_kwargs_for("VPD")):
   exact_trainedci   -- exact pieces FROZEN + CI nets trained (--fit-ci; deferred, long)
   learned_reference -- the saved 25k-step baseline VPD fit re-evaluated on the pool
 
-Storage is append-only: results/vpd_objective/runs/<tag>.json per run, component
-tensors at checkpoints/vpd_objective/<tag>.pt, and --index regenerates
-results/vpd_objective/index.md from all run JSONs.
+Experiment 2 (pricing sweep) lives here too: --sweep-cell fits a FRESH VPD (C=100)
+to the same frozen model with the importance-minimality weight multiplied by
+--imp-mult R (recon weights unchanged -- only the ratio matters), using the port's
+standard fit machinery (mirrors biregular_vpd_compare's decomp_fit driving, steps
+overridable). The record is the standard JSON EXTENDED with basis-ontology metrics
+(read/write concentrations vs the ExactPD and neuron bases, alive counts, and a
+thresholded verdict: neuron_basis / exact_basis / collapsed / mixed), and
+--phase-figure renders figures/vpd_objective/phase_diagram.png over all sweep_*
+runs. NB the sweep's fit seed is --fit-seed (default 0); --seed stays the
+EVAL-POOL seed so every cell is scored on the same fixed pool as the variants.
 
   ./.venv/bin/python -m biregular.vpd_objective              # oracle + learned evals
   ./.venv/bin/python -m biregular.vpd_objective --fit-ci     # deferred: train CI nets
   ./.venv/bin/python -m biregular.vpd_objective --index      # rebuild index.md only
+  ./.venv/bin/python -m biregular.vpd_objective --sweep-cell --imp-mult 55
+  ./.venv/bin/python -m biregular.vpd_objective --phase-figure
 """
 import argparse
 import glob
@@ -35,7 +44,7 @@ from biregular.biregular_vpd_compare import DEFAULT_KW, FIT_SEED, _decomp_path
 from biregular.component_match import (activation_matrices, hungarian_match, mass_matrices,
                                        neuron_basis_stats, score_sides)
 from core.data import CleanDataset
-from core.paths import CHECKPOINTS, RESULTS
+from core.paths import CHECKPOINTS, FIGURES, RESULTS
 from core.pd import ExactPD
 from core.vpd import VPD
 
@@ -45,11 +54,28 @@ EVAL_SEED = 777
 EVAL_BATCHES, EVAL_BATCH = 25, 8192
 INIT_SEED = 0            # CI-net init (V/U are overwritten, so it only matters for --fit-ci)
 CI_STEPS_DEFAULT = 4000  # CPU screening budget (cf. biregular_vpd_compare --steps)
+SWEEP_STEPS_DEFAULT = 10_000
+SWEEP_ALIVE_FRAC = 0.10  # alive = component Frobenius mass > 10% of the side max
 
 RES_DIR = os.path.join(RESULTS, "vpd_objective")
 RUNS_DIR = os.path.join(RES_DIR, "runs")
 INDEX_PATH = os.path.join(RES_DIR, "index.md")
 CKPT_DIR = os.path.join(CHECKPOINTS, "vpd_objective")
+FIG_DIR = os.path.join(FIGURES, "vpd_objective")
+PHASE_FIG = os.path.join(FIG_DIR, "phase_diagram.png")
+
+# Ontology-verdict thresholds (stored verbatim in each sweep record so the JSON is
+# self-documenting). conc/cos/cov are means over ALIVE components / fractions of
+# the relevant basis size; collapsed fires first (too few alive pieces for even a
+# neuron-basis tiling on the write side, or fewer read pieces than half the
+# features), then exact_basis, then neuron_basis, else mixed.
+VERDICT_THRESHOLDS = {
+    "alive_frac": SWEEP_ALIVE_FRAC,
+    "collapsed_alive_out_frac_dmlp": 0.5,   # alive_out < 0.5*d_mlp -> collapsed
+    "collapsed_alive_in_frac_F": 0.5,       # alive_in  < 0.5*F     -> collapsed
+    "conc_hi": 0.8,                         # concentration/cosine "high" cut
+    "coverage_frac": 0.8,                   # distinct-argmax coverage cut
+}
 
 TERM_WEIGHT_KEY = {"importance": "alpha_importance", "stoch_recon": "alpha_stoch",
                    "pgd_recon": "alpha_pgd", "faithful": "alpha_faithfulness"}
@@ -182,6 +208,91 @@ def basis_metrics(pd_v: VPD, p: float) -> dict:
             "ci_stats": pd_v.ci_stats(float(p))}
 
 
+# ------------------------------------------------- sweep basis-ontology metrics
+
+def _stats(t: torch.Tensor) -> dict:
+    """min/median/mean/max of a 1-D tensor (empty -> NaNs)."""
+    if t.numel() == 0:
+        return {k: float("nan") for k in ("min", "median", "mean", "max")}
+    return {"min": float(t.min()), "median": float(t.median()),
+            "mean": float(t.mean()), "max": float(t.max())}
+
+
+def sweep_basis_metrics(pd_v: VPD) -> dict:
+    """Which basis did the sweep cell land in? All statistics are over ALIVE
+    components (Frobenius mass ||V[:,c]||*||U[c,:]|| > SWEEP_ALIVE_FRAC * side max).
+
+      read.feature_conc      -- per-component max|V_in|/||V_in|| (MLP: identity embed,
+                                V_in rows ARE features; ExactPD read piece = e_j -> 1.0)
+      read.feature_coverage  -- distinct feature argmaxes among alive read pieces
+      write_neuron           -- same on V_out columns against the NEURON axis
+                                (the 2026-07-30 neuron-basis finding: conc ~1, coverage ~d_mlp)
+      write_feature          -- alignment against the ExactPD write direction:
+                                u_row_feature_conc = max|U_out[c,:]|/||U_out[c,:]||
+                                (ExactPD: U row = e_j -> 1.0), vcol_wout_cos = best
+                                |cos| of V_out[:,c] vs the w_out COLUMN basis
+                                (ExactPD: V col = w_out[:,j] -> 1.0), plus distinct
+                                feature-argmax coverage of the U rows
+      verdict                -- neuron_basis / exact_basis / collapsed / mixed via
+                                VERDICT_THRESHOLDS (stored alongside)."""
+    model = pd_v.model
+    n_feat, d_mlp = model.n_features, model.d_mlp
+    eps = 1e-12
+    with torch.no_grad():
+        alive = {}
+        for name in pd_v.param_names:
+            key = pd_v._key(name)
+            mass = pd_v.V[key].norm(dim=0) * pd_v.U[key].norm(dim=1)
+            alive[name] = mass > SWEEP_ALIVE_FRAC * mass.max().clamp_min(eps)
+
+        # read side: V_in columns in feature space
+        vin = pd_v.V[pd_v._key("w_in")][:, alive["w_in"]]           # (F, A_in)
+        rconc = vin.abs().max(dim=0).values / vin.norm(dim=0).clamp_min(eps)
+        read = {"alive": int(alive["w_in"].sum()), "feature_conc": _stats(rconc),
+                "feature_coverage": len(set(vin.abs().argmax(dim=0).tolist()))
+                if vin.numel() else 0}
+
+        # write side vs the NEURON basis: V_out columns in neuron space
+        vout = pd_v.V[pd_v._key("w_out")][:, alive["w_out"]]        # (N, A_out)
+        nconc = vout.abs().max(dim=0).values / vout.norm(dim=0).clamp_min(eps)
+        write_neuron = {"alive": int(alive["w_out"].sum()), "neuron_conc": _stats(nconc),
+                        "neuron_coverage": len(set(vout.abs().argmax(dim=0).tolist()))
+                        if vout.numel() else 0}
+
+        # write side vs the ExactPD (w_out COLUMN) basis
+        urows = pd_v.U[pd_v._key("w_out")][alive["w_out"]]          # (A_out, F)
+        uconc = urows.abs().max(dim=1).values / urows.norm(dim=1).clamp_min(eps)
+        w_cols = pd_v.targets["w_out"]
+        w_cols = w_cols / w_cols.norm(dim=0, keepdim=True).clamp_min(eps)   # (N, F)
+        v_hat = vout / vout.norm(dim=0, keepdim=True).clamp_min(eps)
+        cos = (w_cols.T @ v_hat).abs() if vout.numel() else torch.zeros(n_feat, 0)
+        write_feature = {"u_row_feature_conc": _stats(uconc),
+                         "vcol_wout_cos": _stats(cos.max(dim=0).values
+                                                 if cos.numel() else cos.flatten()),
+                         "feature_coverage": len(set(urows.abs().argmax(dim=1).tolist()))
+                         if urows.numel() else 0}
+
+    th = VERDICT_THRESHOLDS
+    if (write_neuron["alive"] < th["collapsed_alive_out_frac_dmlp"] * d_mlp
+            or read["alive"] < th["collapsed_alive_in_frac_F"] * n_feat):
+        verdict = "collapsed"
+    elif (write_feature["u_row_feature_conc"]["mean"] > th["conc_hi"]
+          and write_feature["vcol_wout_cos"]["mean"] > th["conc_hi"]
+          and write_feature["feature_coverage"] >= th["coverage_frac"] * n_feat
+          and read["feature_conc"]["mean"] > th["conc_hi"]
+          and read["feature_coverage"] >= th["coverage_frac"] * n_feat):
+        verdict = "exact_basis"
+    elif (write_neuron["neuron_conc"]["mean"] > th["conc_hi"]
+          and write_neuron["neuron_coverage"] >= th["coverage_frac"] * d_mlp
+          and read["feature_conc"]["mean"] > th["conc_hi"]):
+        verdict = "neuron_basis"
+    else:
+        verdict = "mixed"
+    return {"F": n_feat, "d_mlp": d_mlp, "alive_frac": SWEEP_ALIVE_FRAC,
+            "read": read, "write_neuron": write_neuron, "write_feature": write_feature,
+            "verdict": verdict, "verdict_thresholds": dict(th)}
+
+
 # ---------------------------------------------------------------- storage
 
 def save_run(tag: str, record: dict, pd_v: VPD) -> None:
@@ -248,6 +359,129 @@ def print_comparison(records: list[dict]) -> None:
         print(f"  {name:<{w}}" + "  ".join(f"{fn(r['losses']):>18.4e}" for r in records))
 
 
+# ---------------------------------------------------------------- phase figure
+
+VERDICT_COLORS = {  # Okabe-Ito (CVD-safe); verdict is ALSO position-encoded on y
+    "neuron_basis": "#0072B2", "exact_basis": "#009E73",
+    "collapsed": "#D55E00", "mixed": "#999999"}
+SERIES = ["#0072B2", "#E69F00", "#009E73", "#CC79A7"]  # fixed order, never cycled
+MARKERS = ["o", "s", "^", "D"]
+
+
+def phase_figure() -> None:
+    """Render figures/vpd_objective/phase_diagram.png from all sweep_* run JSONs:
+    x = importance multiplier (log); panels for verdict, alive counts, read/write
+    concentrations vs the ExactPD and neuron bases, and the eval recon terms."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import numpy as np
+
+    rows = []
+    for path in sorted(glob.glob(os.path.join(RUNS_DIR, "sweep_*.json"))):
+        with open(path) as f:
+            r = json.load(f)
+        sb = r.get("sweep_basis")
+        if sb is None:
+            continue
+        rows.append({
+            "mult": float(r["config"]["imp_mult"]), "seed": int(r["config"]["fit_seed"]),
+            "steps": int(r["steps"]), "verdict": sb["verdict"],
+            "F": sb["F"], "d_mlp": sb["d_mlp"],
+            "alive_in": sb["read"]["alive"], "alive_out": sb["write_neuron"]["alive"],
+            "read_conc": sb["read"]["feature_conc"]["mean"],
+            "read_cov": sb["read"]["feature_coverage"] / sb["F"],
+            "wn_conc": sb["write_neuron"]["neuron_conc"]["mean"],
+            "wn_cov": sb["write_neuron"]["neuron_coverage"] / sb["d_mlp"],
+            "wf_uconc": sb["write_feature"]["u_row_feature_conc"]["mean"],
+            "wf_cos": sb["write_feature"]["vcol_wout_cos"]["mean"],
+            "wf_cov": sb["write_feature"]["feature_coverage"] / sb["F"],
+            "stoch": r["losses"]["terms"]["stoch_recon"]["raw"],
+            "pgd": r["losses"]["terms"]["pgd_recon"]["raw"]})
+    if not rows:
+        print(f"  no sweep_* runs under {RUNS_DIR}; nothing to render")
+        return
+    rows.sort(key=lambda r: (r["mult"], r["seed"]))
+    x = np.array([r["mult"] for r in rows])
+    F_ref, N_ref = rows[0]["F"], rows[0]["d_mlp"]
+
+    def col(key):
+        return np.array([r[key] for r in rows], dtype=float)
+
+    def series(ax, keys_labels, hline=None):
+        for i, (key, lbl) in enumerate(keys_labels):
+            # odd series get OPEN markers so coincident points remain visible
+            ax.plot(x, col(key), MARKERS[i] + "-", color=SERIES[i], ms=6, lw=1.5,
+                    mfc=SERIES[i] if i % 2 == 0 else "none", mew=1.5, label=lbl)
+        if hline:
+            for y, lbl, c in hline:
+                ax.axhline(y, color=c, lw=1.0, ls=":")
+                ax.annotate(lbl, (x.min(), y), fontsize=7, color=c,
+                            xytext=(2, 3), textcoords="offset points")
+        ax.set_xscale("log")
+        ax.grid(alpha=0.25, lw=0.5)
+        ax.legend(fontsize=7)
+
+    fig, axes = plt.subplots(2, 3, figsize=(16.5, 8.2), constrained_layout=True)
+
+    ax = axes[0][0]  # verdict: categorical y + fixed colors (double-encoded)
+    order = ["collapsed", "mixed", "neuron_basis", "exact_basis"]
+    ypos = {v: i for i, v in enumerate(order)}
+    for r in rows:
+        ax.scatter(r["mult"], ypos[r["verdict"]], s=70,
+                   color=VERDICT_COLORS[r["verdict"]], zorder=3)
+        ax.annotate(f"s{r['seed']}", (r["mult"], ypos[r["verdict"]]), fontsize=6,
+                    xytext=(4, 5), textcoords="offset points", color="#555555")
+    ax.set_xscale("log")
+    ax.set_yticks(range(len(order)), order, fontsize=8)
+    ax.set_ylim(-0.5, len(order) - 0.5)
+    ax.grid(alpha=0.25, lw=0.5)
+    ax.set_title("ontology verdict (thresholded)", fontsize=10)
+
+    ax = axes[0][1]
+    series(ax, [("alive_in", "alive read pieces (w_in)"),
+                ("alive_out", "alive write pieces (w_out)")],
+           hline=[(F_ref, f"F={F_ref} (exact basis)", "#009E73"),
+                  (N_ref, f"d_mlp={N_ref} (neuron basis)", "#0072B2")])
+    ax.set_ylim(0, max(F_ref, col("alive_in").max(), col("alive_out").max()) * 1.12)
+    ax.set_title(f"alive components (mass > {SWEEP_ALIVE_FRAC:.0%} of side max)",
+                 fontsize=10)
+
+    ax = axes[0][2]
+    series(ax, [("read_conc", "feature conc. max|V_in|/‖V_in‖ (mean)"),
+                ("read_cov", "distinct-feature coverage / F")])
+    ax.set_ylim(0, 1.05)
+    ax.set_title("read side vs feature basis (ExactPD read = 1.0)", fontsize=10)
+
+    ax = axes[1][0]
+    series(ax, [("wn_conc", "neuron conc. max|V_out|/‖V_out‖ (mean)"),
+                ("wn_cov", "distinct-neuron coverage / d_mlp")])
+    ax.set_ylim(0, 1.05)
+    ax.set_title("write side vs NEURON basis", fontsize=10)
+
+    ax = axes[1][1]
+    series(ax, [("wf_uconc", "U-row feature conc. (mean)"),
+                ("wf_cos", "best |cos|(V_out, w_out col) (mean)"),
+                ("wf_cov", "distinct-feature coverage / F")])
+    ax.set_ylim(0, 1.05)
+    ax.set_title("write side vs ExactPD (w_out column) basis", fontsize=10)
+
+    ax = axes[1][2]
+    series(ax, [("stoch", "stoch recon (raw)"), ("pgd", "PGD recon (raw)")])
+    ax.set_yscale("log")
+    ax.set_title("eval recon terms on the fixed pool", fontsize=10)
+
+    for ax in axes.flat:
+        ax.set_xlabel("importance-weight multiplier R (× 1e-4)", fontsize=8)
+        ax.tick_params(labelsize=8)
+    fig.suptitle("VPD pricing sweep: importance-minimality weight vs learned basis "
+                 f"(K=5 transpose, p={P_DEFAULT}; {len(rows)} cells)", fontsize=12)
+    os.makedirs(FIG_DIR, exist_ok=True)
+    fig.savefig(PHASE_FIG, dpi=140, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  phase figure ({len(rows)} cells) -> {PHASE_FIG}")
+
+
 # ---------------------------------------------------------------- runners
 
 def _base_config(code: CodeAnsatz, ab, p: str, a) -> dict:
@@ -259,15 +493,45 @@ def _base_config(code: CodeAnsatz, ab, p: str, a) -> dict:
 
 
 def run_variant(tag: str, pd_v: VPD, code: CodeAnsatz, ab, p: str, a,
-                steps: int, extra_cfg: dict | None = None) -> dict:
+                steps: int, extra_cfg: dict | None = None,
+                extra_record: dict | None = None) -> dict:
     losses = eval_objective(pd_v, p=float(p), seed=a.seed, n_batches=a.batches,
                             batch=a.batch)
     record = {"tag": tag, "timestamp": datetime.now().isoformat(timespec="seconds"),
               "config": _base_config(code, ab, p, a) | (extra_cfg or {}),
               "steps": steps, "losses": losses,
-              "basis_metrics": basis_metrics(pd_v, float(p))}
+              "basis_metrics": basis_metrics(pd_v, float(p))} | (extra_record or {})
     save_run(tag, record, pd_v)
     return record
+
+
+def run_sweep_cell(a, code: CodeAnsatz, model, ab, ab_source: str) -> dict:
+    """Experiment 2 cell: fresh VPD fit with alpha_importance scaled by --imp-mult.
+    Fit machinery mirrors biregular_vpd_compare.fit_or_load_vpd (build_pd + the
+    port's fit loop at METHOD_LR), with the steps override and fit seed S; the
+    EVALUATION uses the port's DEFAULT term weights on the standard fixed pool, so
+    raw terms and totals are comparable across cells and against the variants."""
+    R, S = a.imp_mult, a.fit_seed
+    fit_kw = DEFAULT_KW | {"alpha_importance": DEFAULT_KW["alpha_importance"] * R}
+    tag = f"sweep_imp{R:g}_s{S}"
+    decomp_fit.set_seed(S)  # reproducible V/U + CI init (incl. the data-free warmup)
+    pd_v = decomp_fit.build_pd("VPD", model, F)
+    curves = decomp_fit.fit_decomposition(
+        pd_v, CleanDataset(n_features=F, p=float(a.p), device=a.device, seed=S),
+        steps=a.steps, loss_kwargs=fit_kw, seed=S, desc=f"{tag} p={a.p}")
+    print(f"  {tag} fit done: total {curves['total'][0]:.3e} -> {curves['total'][-1]:.3e}")
+    sweep = sweep_basis_metrics(pd_v)
+    print(f"  verdict={sweep['verdict']}  alive(in/out)="
+          f"{sweep['read']['alive']}/{sweep['write_neuron']['alive']}  "
+          f"read_conc={sweep['read']['feature_conc']['mean']:.2f}  "
+          f"write_nconc={sweep['write_neuron']['neuron_conc']['mean']:.2f}  "
+          f"write_uconc={sweep['write_feature']['u_row_feature_conc']['mean']:.2f}")
+    return run_variant(
+        tag, pd_v, code, ab, a.p, a, steps=a.steps,
+        extra_cfg={"ab_source": ab_source, "components": "learned_sweep",
+                   "gates": "learned_ci", "imp_mult": R, "fit_seed": S,
+                   "fit_loss_kwargs": fit_kw},
+        extra_record={"sweep_basis": sweep})
 
 
 def main():
@@ -281,12 +545,27 @@ def main():
                     help="DEFERRED variant (b): freeze exact components, train the CI "
                          "nets with the port's optimizer, then eval -> exact_trainedci")
     ap.add_argument("--ci-steps", type=int, default=CI_STEPS_DEFAULT, dest="ci_steps")
+    ap.add_argument("--sweep-cell", action="store_true", dest="sweep_cell",
+                    help="Experiment 2: fit a FRESH VPD with alpha_importance "
+                         "scaled by --imp-mult, then eval on the standard pool")
+    ap.add_argument("--imp-mult", type=float, default=None, dest="imp_mult",
+                    help="importance-weight multiplier R (sweep tag sweep_imp{R}_s{S})")
+    ap.add_argument("--steps", type=int, default=SWEEP_STEPS_DEFAULT,
+                    help="sweep-cell fit steps (25000 = the full reference recipe)")
+    ap.add_argument("--fit-seed", type=int, default=0, dest="fit_seed",
+                    help="sweep-cell fit seed S (--seed stays the eval-pool seed)")
+    ap.add_argument("--phase-figure", action="store_true", dest="phase_figure",
+                    help="render figures/vpd_objective/phase_diagram.png from all "
+                         "sweep_* runs (no fitting)")
     ap.add_argument("--index", action="store_true", help="rebuild index.md only")
     ap.add_argument("--device", default="cpu")
     a = ap.parse_args()
 
     if a.index:
         write_index()
+        return
+    if a.phase_figure:
+        phase_figure()
         return
 
     code = CodeAnsatz(5, family="regular", seed=0, swaps=0, decoder="transpose")
@@ -303,6 +582,12 @@ def main():
     model = code.model(ab, device=a.device)
     print(f"[{code.name}] p={a.p} ab=({ab[0]:.4f},{ab[1]:.4f}) [{ab_source}] "
           f"pool: seed={a.seed} {a.batches}x{a.batch}")
+
+    if a.sweep_cell:  # Experiment 2: pricing-sweep cell
+        assert a.imp_mult is not None, "--sweep-cell requires --imp-mult R"
+        rec = run_sweep_cell(a, code, model, ab, ab_source)
+        print_comparison([rec])
+        return
 
     if a.fit_ci:  # variant (b): exact components frozen, CI nets trained
         pd_v = build_exact_vpd(model)

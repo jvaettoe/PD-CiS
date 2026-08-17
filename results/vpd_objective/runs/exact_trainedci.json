@@ -1,0 +1,116 @@
+{
+ "tag": "exact_trainedci",
+ "timestamp": "2026-08-17T14:53:42",
+ "config": {
+  "K": 5,
+  "family": "regular",
+  "code_seed": 0,
+  "swaps": 0,
+  "decoder": "transpose",
+  "p": "0.001",
+  "ab": [
+   0.3645663261413574,
+   -0.04756719991564751
+  ],
+  "C": 100,
+  "loss_kwargs": {
+   "alpha_faithfulness": 0.0,
+   "alpha_importance": 0.0001,
+   "alpha_stoch": 2.0,
+   "alpha_pgd": 2.0,
+   "pnorm": 2.0
+  },
+  "eval_pool": {
+   "seed": 777,
+   "n_batches": 25,
+   "batch": 8192
+  },
+  "init_seed": 0,
+  "ab_source": "learned_payload",
+  "components": "exact_frozen",
+  "gates": "trained_ci",
+  "ci_fit_seed": 31337
+ },
+ "steps": 4000,
+ "losses": {
+  "total": 0.00035822891513817014,
+  "terms": {
+   "importance": {
+    "raw": 0.4205085790157318,
+    "weighted": 4.2050857901573185e-05
+   },
+   "stoch_recon": {
+    "raw": 4.514187399763614e-05,
+    "weighted": 9.028374799527228e-05
+   },
+   "pgd_recon": {
+    "raw": 0.00011294715397525579,
+    "weighted": 0.00022589430795051158
+   },
+   "faithful": {
+    "raw": 0.0,
+    "weighted": 0.0
+   }
+  },
+  "per_matrix": {
+   "importance": {
+    "w_in": 0.0303069531917572,
+    "w_out": 0.39020162463188174
+   },
+   "stoch_recon": {
+    "w_in": 3.4545211092336104e-05,
+    "w_out": 2.452359643939417e-05
+   }
+  }
+ },
+ "basis_metrics": {
+  "in": {
+   "act_purity": 1.0,
+   "act_coverage": 100,
+   "mass_purity": 1.0,
+   "match_agree": 1.0,
+   "row_entropy": 0.0,
+   "split": 0
+  },
+  "out": {
+   "act_purity": 1.0,
+   "act_coverage": 100,
+   "mass_purity": 1.0,
+   "match_agree": 1.0,
+   "row_entropy": 0.0,
+   "split": 0
+  },
+  "index_agreement": 1.0,
+  "dead_components": 0,
+  "neuron_basis": {
+   "w_in": {
+    "alive": 100,
+    "neuron_conc": 0.1734280227124691,
+    "neurons_covered": 22
+   },
+   "w_out": {
+    "alive": 100,
+    "neuron_conc": 0.1734280227124691,
+    "neurons_covered": 22
+   }
+  },
+  "ci_stats": {
+   "w_in": {
+    "ci_l0": 0.203369140625,
+    "n_alive_union": 97,
+    "pr_mean_ci": 76.82343292236328
+   },
+   "w_out": {
+    "ci_l0": 3.914306640625,
+    "n_alive_union": 100,
+    "pr_mean_ci": 99.41121673583984
+   },
+   "headline": {
+    "ci_l0": 3.914306640625,
+    "n_alive_union": 100,
+    "pr_mean_ci": 99.41121673583984
+   }
+  }
+ },
+ "checkpoint": "checkpoints/vpd_objective/exact_trainedci.pt"
+}

@@ -238,3 +238,16 @@ each model (`toys/<name>/MEMO.md`); this file records what was done and when.
   preference, but Exp-1's oracle-gate result shows the neuron-basis write
   optimum follows from the IDEAL objective (interference ownership) — gate
   architecture is separable. Candidate Exp-3: rerun under ci mode "global".
+
+## 2026-08-17 — Exp 2 pricing sweep: no exact-basis window at 10k steps
+- Five cells R in {10,30,55,100,300}x default importance. Sequence observed:
+  structured neuron-leaning mixed (R=10, ci_l0 0.30, read conc 0.82) ->
+  progressive gate starvation -> CI COLLAPSE at R=300 (imp mass 5.4e-5,
+  ci_l0 0.07; mass-based verdict says "mixed" but gating is dead). ExactPD
+  recovery NOT observed: dynamics skip the exact basin even where its total
+  is statically cheaper — importance pressure kills CIs before rotating the
+  write basis. Peak exact-direction signal at R=30 (write V-cos 0.70).
+  Caveat: 10k-step fits vs 25k reference; warm-restart extensions of R in
+  {10,30} are the natural follow-up. Phase diagram:
+  figures/vpd_objective/phase_diagram.png. Trained-model Goodfire leg still
+  running.
