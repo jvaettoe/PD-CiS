@@ -1,0 +1,9 @@
+stage,matrix,C,n_alive,sum_rel_residual,conc_median_alive,conc_coverage_alive,hung_median_cos_alive,hung_frac_gt0.8_alive,frame_best_median_alive,frame_coverage_alive,svd_vside_median_alive,verdict
+10k,lin_emb,100,100,0.656,0.593,75,0.283,0.020,,,,
+10k,lin_in,100,69,0.239,0.456,44,0.110,0.000,0.452,58,0.473,mixed
+10k,lin_out,100,50,0.283,0.447,40,0.122,0.000,,,,
+10k,lin_unemb,100,98,0.624,0.301,54,0.081,0.000,,,,
+warm,lin_emb,100,100,0.626,0.728,79,0.445,0.120,,,,
+warm,lin_in,100,66,0.207,0.468,41,0.138,0.000,0.497,58,0.456,mixed
+warm,lin_out,100,46,0.262,0.512,37,0.120,0.000,,,,
+warm,lin_unemb,100,92,0.560,0.294,53,0.083,0.000,,,,

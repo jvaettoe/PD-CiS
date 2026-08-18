@@ -20,3 +20,22 @@ Per-matrix structural comparison of learned VPD subcomponents (V/U rank-1 pieces
 - (ii) embedded-feature frame {W_e[j]}: best-|cos| median = 0.579 (alive) / 0.579 (all); distinct-feature coverage 86/100 (alive), 86/100 (all)
 - (iii) U-side neuron axes: top-share median = 0.462 (alive); distinct-neuron coverage 42/50
 - **verdict: `mixed`** — thresholds: svd_aligned: Hungarian median |cos| vs triplets > 0.8 (alive-restricted); feature_frame_aligned: best-|cos| median vs W_e rows > 0.8 (alive) with distinct-feature coverage >= 60; collapsed: alive < 25; else: mixed
+
+## Stage warm — consolidated (post warm-restart)
+
+- run: `exports/goodfire/out/decompositions/p-832f0310` (checkpoint `model_10000.pth`, step 10000)
+- alive threshold: mass > 10% of per-matrix max mass
+
+| matrix | alive/C | Σ-comp rel resid | conc median (alive) | conc coverage (alive) | Hungarian med \|cos\| (alive / all) | frac>0.8 (alive) |
+|---|---|---|---|---|---|---|
+| lin_emb | 100/100 | 0.705 | 0.991 | 91/100 | 0.842 / 0.842 | 0.550 |
+| lin_in | 100/100 | 0.258 | 0.462 | 43/50 | 0.091 / 0.091 | 0.000 |
+| lin_out | 70/100 | 0.338 | 0.492 | 47/50 | 0.086 / 0.083 | 0.000 |
+| lin_unemb | 100/100 | 0.850 | 0.304 | 62/100 | 0.065 / 0.065 | 0.000 |
+
+### lin_in three-frame readout (stage warm)
+
+- (i) SVD triplets: Hungarian full-piece median |cos| = 0.091 (alive) / 0.091 (all matched); V-side-only best |cos| vs u_k median = 0.309 (alive)
+- (ii) embedded-feature frame {W_e[j]}: best-|cos| median = 0.633 (alive) / 0.633 (all); distinct-feature coverage 90/100 (alive), 90/100 (all)
+- (iii) U-side neuron axes: top-share median = 0.462 (alive); distinct-neuron coverage 43/50
+- **verdict: `mixed`** — thresholds: svd_aligned: Hungarian median |cos| vs triplets > 0.8 (alive-restricted); feature_frame_aligned: best-|cos| median vs W_e rows > 0.8 (alive) with distinct-feature coverage >= 60; collapsed: alive < 25; else: mixed

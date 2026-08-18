@@ -295,3 +295,17 @@ each model (`toys/<name>/MEMO.md`); this file records what was done and when.
   Loading matrix dense at d200 (max |L| 0.34): SVD frame vs embedded-feature
   frame maximally distinguishable. param-decomp 4-Linear experiment added,
   smokes clean (1.5/1.9 it/s); four-leg run chain launched (~7 h).
+
+## 2026-08-18 — Embedded ideal-vs-VPD: all four legs + comparison complete
+- (Leg-2 SIGKILL overnight; redone.) Consolidated verdicts:
+  lin_in NOT SVD-aligned at either d_emb (Hungarian ~0.09-0.14, flat under
+  consolidation) — the ideal SVD triplets are not what VPD finds. Strongest
+  frame = embedded features: d200 0.633 median, 90/100 coverage
+  (strengthening 10k->warm, below 0.8 threshold => verdict mixed); d50
+  diluted (0.497, 58/100) as 100 feature directions crowd 50 dims.
+  lin_emb -> ideal row pieces at d200 (conc 0.991, Hungarian 0.842);
+  partial at d50. lin_out partial neuron structure. lin_unemb unstructured
+  (delta carries it). OPEN FINDING: Sigma-residuals 0.21-0.85 — in the
+  4-matrix sandwich the delta remains a major weight carrier even after
+  consolidation, unlike the 2-matrix runs. Artifacts:
+  results|figures/embedded/ideal_vs_vpd/; embed/MEMO.md being written.
