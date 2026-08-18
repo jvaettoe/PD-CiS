@@ -309,3 +309,16 @@ each model (`toys/<name>/MEMO.md`); this file records what was done and when.
   4-matrix sandwich the delta remains a major weight carrier even after
   consolidation, unlike the 2-matrix runs. Artifacts:
   results|figures/embedded/ideal_vs_vpd/; embed/MEMO.md being written.
+
+## 2026-08-18 — CORRECTION + closure: VPD found the DUAL frame (causal-minimal PD)
+- User question "what satisfies causal minimality?" -> answer: the dual-basis
+  per-feature decomposition (W_in = sum_j dual_j x codeword_j): exact
+  self-activation at d>=F (activation = x_j identically), least-squares-
+  optimal below (pinv optimality; G quantifies degradation; trace theorem =
+  the bound). Costs 2x-overcomplete pieces — causal minimality and
+  count/mass minimality are incompatible on the rank-50 code layer.
+- Re-scored learned lin_in against the dual frame: d200 median |cos| 0.911
+  (77/100 > 0.7) vs 0.627 for W_e rows — the earlier "mixed" verdict was a
+  wrong-reference artifact; VPD FOUND the dual-basis read ontology at d200,
+  and its d50 dilution (0.564) matches the G-softening prediction. Summary/
+  memo update needed to reflect dual-frame scoring as the primary reference.
