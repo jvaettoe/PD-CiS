@@ -342,3 +342,35 @@ each model (`toys/<name>/MEMO.md`); this file records what was done and when.
   ontology; census energy and causal count DISAGREE for columns — truncated
   fidelity is the discriminator. Artifacts: results|figures/embedded/
   ideal_vs_vpd/mechanism_forward/.
+
+## 2026-08-18 — Cut-side principle grid: confirmed on all 4 matrices (designed d200)
+- New --grid mode in embed/embed_mechanism_forward.py: full 4-matrix x 2-cut-
+  direction grid on the designed sandwich (y = relu(x W_e W_in) W_in^T W_e^T;
+  W_emb F x d, W_in d x N, W_out = W_in^T, W_unemb = W_e^T). Each cell cuts one
+  matrix into input-side rows or output-side columns (all 8 tilings bitwise),
+  censuses activation coefficients on one-hot probes, and measures truncation
+  fidelity with ONLY that matrix truncated to top-m pieces (untied; other three
+  matrices full).
+- Principle under test: decompose each layer on the side where its OWN weights
+  re-concentrate the signal into discrete events; never cut a dense interface.
+  Predictions {W_emb: input m*=1; W_in: output m*=5; W_out: input m*=5;
+  W_unemb: output m*=1}.
+- RESULT — winner sides 4/4 CONFIRMED, spike counts 4/4 at prediction:
+  W_emb input 1/1 (spike/leak m*, errors ~1e-15 from m=1) vs output 162/110;
+  W_in output 5/5 (regression: bitwise == existing census; m*=5 all features)
+  vs input 162/110; W_out input 5/5 (post-ReLU h is exactly K-sparse) vs
+  output 161/153; W_unemb output spike m*=1 (top piece IS the target readout,
+  error 0 at m=1, every feature) vs input 161/153.
+- One deviating number, understood: W_unemb output-cut leak m* = 98 (not 1) —
+  at the FINAL matrix the coordinate cut is aligned with the error metric, so
+  leak fidelity degenerates into a support census of y's leak (n99 = 97); the
+  mechanism (target readout) is still exactly 1 piece. W_emb shows 1/1 only
+  because the probe itself is 1-sparse.
+- Structural finding: dense-interface cells are pairwise the SAME decomposition
+  (W_emb output-cut == W_in input-cut, W_out output-cut == W_unemb input-cut;
+  truncated forwards bitwise equal) — an interface cut is one object however
+  booked, needing ~110-160 of 200 pieces. v-invariance of m* asserted (v=1 vs
+  2.5; error curves can permute inside exactly-tied coefficient groups).
+- VERDICT: principle survives unfalsified on the designed model — candidate
+  general design rule for layer-local PD. Artifacts: results|figures/embedded/
+  ideal_vs_vpd/mechanism_forward/cutside_grid_d200.{md,csv,png}.

@@ -109,3 +109,34 @@ mechanism. Rows: PR 68.5, n50/90/99 = 25/90/147 (embedding-density diffuse);
 SVD: PR 15.5, n99 = 37 (collective). Artifacts:
 `results|figures/embedded/ideal_vs_vpd/mechanism_forward/` (census_d200.md,
 activity.csv, activity-curve / truncation-fidelity / example-spectra figures).
+
+## Addendum — cut-side principle grid (d200): where to cut each of the four matrices
+
+Completing the census's open question: the full 4-matrix × 2-cut-direction grid
+(`--grid` mode of `embed/embed_mechanism_forward.py`), each matrix of
+y = relu(x W_e W_in) W_inᵀ W_eᵀ cut into input-side rows or output-side columns
+(all 8 tilings bitwise), with truncation fidelity measured for ONLY that matrix
+truncated to its top-m pieces by |activation coefficient| (untied — the other
+three matrices stay full; the W_in output-cut coincides with the established
+tied per-neuron result, m* = 5 for every feature, regression-asserted).
+
+**Verdict: the cut-side principle survives unfalsified — every matrix is
+causally minimal exactly on the side where its own weights re-concentrate the
+signal into discrete events, never along the dense embedding interface.**
+Winner sides 4/4 as predicted, spike-m* 4/4 at the predicted counts:
+W_emb input-cut 1 (the active feature's row is the whole read; errors ~1e-15
+from m = 1) vs output-cut 162/110 (spike/leak); W_in output-cut 5 vs input-cut
+162/110; W_out input-cut 5 (post-ReLU h is exactly K-sparse) vs output-cut
+161/153; W_unemb output-cut spike 1 (the top piece IS the target readout
+⟨z, W_e[j]⟩, error 0 at m = 1 for every feature) vs input-cut 161/153. Two
+structural readings: (1) the dense-interface cells are pairwise the SAME
+decomposition (W_emb output-cut ≡ W_in input-cut and W_out output-cut ≡
+W_unemb input-cut, truncated forwards bitwise equal) — an interface cut is one
+object however booked, and it needs ~110–160 of 200 pieces; (2) the one
+deviating number, W_unemb output-cut leak m* = 98, is a criterion artifact:
+at the final matrix the coordinate cut is aligned with the error metric, so
+leak fidelity degenerates into a support census of the output's leak
+(n99 = 97) — the re-concentrated mechanism is still exactly 1 piece, and
+W_emb's 1/1 differs only because the probe itself is 1-sparse. Artifacts:
+`results|figures/embedded/ideal_vs_vpd/mechanism_forward/
+cutside_grid_d200.{md,csv,png}`.
