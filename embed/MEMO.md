@@ -82,3 +82,30 @@ entirely by the runtime delta) — in the 4-matrix sandwich the delta remains a
 major weight carrier, unlike the 2-matrix designed runs. Artifacts:
 `results|figures/embedded/ideal_vs_vpd/` (per-stage comparison.md/CSV/JSON,
 align figures, `summary.md`, `summary_ontology.png`).
+
+## Addendum — mechanism forward-pass census (d200): which W_in ontology is causally concentrated?
+
+Strictly layer-local chain mechanisms on one-hot probes (W_emb component
+e_j ⊗ W_e[j] emits a_j = v·W_e[j]; W_in pieces activate with coefficients read
+off the chain; tied transposes for W_out and the unembedding). Option A —
+projecting hidden activations onto W_emb-derived directions — is REJECTED on
+principle: the decomposition must be fixed before inference, and A smuggles
+W_emb knowledge into the W_in ontology at inference time. Three exact tilings
+compared instead (all full-sum forwards ≡ the full model to <1e-15; identity,
+not finding): per-emb-dim ROWS e_d ⊗ W_in[d,:], per-neuron COLUMNS
+W_in[:,n] ⊗ e_n, and the SVD triplets σ_k u_k v_kᵀ.
+
+**Verdict: the per-neuron column ontology is the causally concentrated one —
+exactly K = 5 components per feature suffice, machine-exactly.** Truncated
+tied-transpose forwards (top-m by |coefficient|): columns reach spike ≤1% and
+leak ≤10% at m* = 5 for every feature (errors ~1e-16 from m = 5 on); SVD needs
+40/43 of 50 (median spike/leak; no knee, consistent with the earlier
+truncation-cannot-denoise result); rows need 176/198 of 200. The census
+(cutoff-free: PR + 50/90/99% energy counts) and the causal count DISAGREE for
+columns — pre-activation energy is spread over the b-floor (PR 6.6, n99 = 47
+of 50) but the ReLU kills every off-code (negative) pre-activation, so the 45
+b-floor pieces are causally inert and only the K on-code pieces carry the
+mechanism. Rows: PR 68.5, n50/90/99 = 25/90/147 (embedding-density diffuse);
+SVD: PR 15.5, n99 = 37 (collective). Artifacts:
+`results|figures/embedded/ideal_vs_vpd/mechanism_forward/` (census_d200.md,
+activity.csv, activity-curve / truncation-fidelity / example-spectra figures).

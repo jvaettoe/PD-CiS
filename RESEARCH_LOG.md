@@ -322,3 +322,23 @@ each model (`toys/<name>/MEMO.md`); this file records what was done and when.
   wrong-reference artifact; VPD FOUND the dual-basis read ontology at d200,
   and its d50 dilution (0.564) matches the G-softening prediction. Summary/
   memo update needed to reflect dual-frame scoring as the primary reference.
+
+## 2026-08-18 — Mechanism forward census: column (per-neuron) ontology wins at d200
+- New embed/embed_mechanism_forward.py: full model vs strictly layer-local
+  chain mechanisms (transpose decoder, tied W_out=W_in^T) under three W_in
+  ontologies — per-emb-dim ROWS (200), per-neuron COLUMNS (50), SVD triplets
+  (50). All tilings exact (row/column bitwise; SVD 1.4e-15); full-sum chain
+  forwards == full model to <1e-15 on all 100 one-hot probes (identities, not
+  findings). Option A (activation-direction projections) rejected: needs
+  W_emb at inference; decomposition must be fixed before inference.
+- Census (no cutoffs; PR + 50/90/99% counts): rows PR med 68.5, n50/90/99 =
+  25/90/147 of 200; columns PR 6.6 (constant), 3/17/47 of 50; SVD PR 15.5,
+  6/21/37 of 50.
+- Truncated-forward fidelity (tied top-m): columns need EXACTLY m*=5 (=K, all
+  features) for spike<=1% AND leak<=10% — machine-exact beyond (ReLU kills
+  the b-floor: off-code pre-activations are negative, so the 45 census-heavy
+  b-pieces are causally inert). SVD needs 40/43 (med spike/leak) of 50; rows
+  176/198 of 200. VERDICT: per-neuron columns are the causally concentrated
+  ontology; census energy and causal count DISAGREE for columns — truncated
+  fidelity is the discriminator. Artifacts: results|figures/embedded/
+  ideal_vs_vpd/mechanism_forward/.
