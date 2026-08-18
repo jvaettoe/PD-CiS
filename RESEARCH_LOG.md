@@ -416,3 +416,14 @@ each model (`toys/<name>/MEMO.md`); this file records what was done and when.
 - Artifacts: results|figures/embedded/ideal_vs_vpd/mechanism_forward/
   {cutside_grid_d50.md/csv/png, mechanism_spectra_d50.md/png}; d200 files
   byte-untouched.
+
+## 2026-08-18 — Ladder recovery sweep: discreteness returns EXACTLY at d_emb = F
+- Sweep d_emb 50->200 (designed sandwich, same C, per-d random unit-row W_e):
+  smearing shrinks slowly to d=90 then fast (class std 4.2e-2 at d50 ->
+  1.3e-2 at d99) and drops ~4 orders of magnitude AT d=100 (1.9e-6, float
+  residual only; separability inf for practical purposes). Sharp transition
+  at d=F exactly, as G = W_e W_e+ = I once W_e has full row rank — NOT
+  gradual/asymptotic. Conditioning of W_e spikes at the transition (3.8e2 at
+  d=100, decaying both directions) — the exact-recovery point is also the
+  numerically most fragile. Figure:
+  mechanism_forward/ladder_recovery_vs_demb.png.
