@@ -374,3 +374,45 @@ each model (`toys/<name>/MEMO.md`); this file records what was done and when.
 - VERDICT: principle survives unfalsified on the designed model — candidate
   general design rule for layer-local PD. Artifacts: results|figures/embedded/
   ideal_vs_vpd/mechanism_forward/cutside_grid_d200.{md,csv,png}.
+
+## 2026-08-18 — d50 reruns: cut-side grid + mechanism solo spectra (G-noise regime)
+- embed/embed_mechanism_forward.py gains --d-emb {200,50} (default 200): loads
+  ideal_d{D}.pt, suffixes all outputs _d{D}; d200 outputs untouched. Regime at
+  d50: W_e W_in = G C with G = W_e W_e^T a rank-50 projector (mean G_jj =
+  0.500, max|W_e W_in - G C| = 3.9e-16); off-code preactivations go positive
+  through G-noise — causal count #(pre>0) med 21 (14–26) per feature vs
+  exactly K = 5 at d200 (100/100 deviate). G = I-dependent identities are
+  REPORTED, not asserted; tiling (8/8 bitwise), duality (both interface pairs
+  bitwise), W_emb-input identity and v-invariance stay hard asserts — all PASS.
+- GRID at d50, m* spike/leak med (min–max), d200 in parens: W_emb input
+  1 (1–1)/1 (1–1) [1/1]; W_emb output 43 (36–49)/40 (31–47) [162/110]; W_in
+  input == W_emb output (duality); W_in output 34 (25–42)/33 (18–42) [5/5];
+  W_out input 14 (9–20)/14 (9–20) [5/5]; W_out output 43 (33–49)/41 (35–46)
+  [161/153]; W_unemb input == W_out output; W_unemb output spike 1 (1–1),
+  leak 75 (67–82) [1/98]. Winner sides 3/4: W_unemb FLIPS to input by the
+  combined median — the d200-diagnosed leak-criterion artifact now dominates
+  (output-cut spike m* still 1 with the top piece = target readout for
+  100/100; leak m* 75 ~ y-census n99 = 73, a support census of the broadband
+  G-noise leak). The {1,5,5,1} knees soften to {1,34,14,1-spike}; note the
+  |coefficient| ranking also spends slots on large-|negative| dead pieces in
+  the W_in output cut, so m* (34) overshoots even the causal count (21).
+- SPECTRA at d50 (1+5+5+1 winning-cut convention, features 0/61/1 as d200):
+  full spike 0.2034/0.1768/0.1901; mech spike 0.1480/0.0828/0.1303 (spike err
+  27/53/31% — top-5 misses causal mass; kept top-5 != on-code: 4/5, 3/5, 4/5
+  neurons). Strict mech off-target EXACTLY 0 at any d (structural: the
+  W_unemb column-j piece writes only coordinate j) — the predicted nonzero
+  G-noise leak lives at the retained write z read through the FULL unembed
+  bank: full-read leak max 0.1168/0.0878/0.1221 vs full-model off-max
+  0.1145/0.1525/0.0963. Leak ladder SMEARED into overlapping bands:
+  within-class std 1.4e-2–4.5e-2 vs the d200 exact ladder (~3e-16); class
+  means shrink (m_ov=2: 0.034/0.023/0.048 vs d200 0.2138; m_ov=3: 0.096/0.061
+  vs 0.3640) and bands overlap (probe 61: an m_ov=1 leak of 0.1525 exceeds
+  its m_ov=3 leak 0.0956).
+- Predictions on record, checked: (1) spike near K a^2 G_jj^2 with per-feature
+  spread — CONFIRMED (mech-spike ratio med 1.061, range 0.447–1.920; full
+  spike med 1.378, 0.805–2.470: extra positive G-noise writes); (2) m*=5 knee
+  softened for some features — CONFIRMED and stronger: softened for ALL
+  features (min 25); (3) leak ladder smeared into bands — CONFIRMED.
+- Artifacts: results|figures/embedded/ideal_vs_vpd/mechanism_forward/
+  {cutside_grid_d50.md/csv/png, mechanism_spectra_d50.md/png}; d200 files
+  byte-untouched.

@@ -49,6 +49,28 @@ Grid outputs:
   results/embedded/ideal_vs_vpd/mechanism_forward/
       {cutside_grid_d200.md, cutside_grid_d200.csv}
   figures/embedded/ideal_vs_vpd/mechanism_forward/cutside_grid_d200.png
+
+--d-emb {200,50}: checkpoint selector (default 200). Loads ideal_d{D}.pt and
+suffixes every output _d{D}. At d50 (d_emb < F) the effective code is
+W_e W_in = G C with G = W_e W_e^T a rank-50 projector (mean G_jj = d/F = 0.5):
+off-code pre-activations can go positive through G-noise, the causal count
+(pre > 0) varies per feature and may exceed K, and every identity that
+depends on G = I is REPORTED instead of asserted. Tiling/duality/homogeneity
+asserts are d-independent and stay hard.
+
+--spectra: mechanism solo spectra — winning-cut component convention
+(W_emb row j + top-5-by-|coefficient| W_in column pieces + same-neuron W_out
+row pieces + W_unemb column j; 1+5+5+1 pieces, top-5 kept for d200
+comparability), example features (0, 61, 1) as in the d200 run: full-model vs
+mechanism panels, per-probe spike/leak numbers, and the leak-ladder smear
+analysis (off-target values grouped by codeword overlap; d50 bands vs the
+d200 exact ladder, contrasted in-memory without touching d200 outputs).
+
+  ./.venv/bin/python -m embed.embed_mechanism_forward --spectra --d-emb 50
+
+Spectra outputs:
+  results/embedded/ideal_vs_vpd/mechanism_forward/mechanism_spectra_d{D}.md
+  figures/embedded/ideal_vs_vpd/mechanism_forward/mechanism_spectra_d{D}.png
 """
 import argparse
 import os
@@ -63,6 +85,15 @@ import torch
 
 D_EMB = 200
 CKPT = os.path.join(CHECKPOINTS, "embedded_ideal", f"ideal_d{D_EMB}.pt")
+
+
+def set_demb(d: int) -> None:
+    """Select the checkpoint / output suffix (called from __main__)."""
+    global D_EMB, CKPT
+    D_EMB = d
+    CKPT = os.path.join(CHECKPOINTS, "embedded_ideal", f"ideal_d{d}.pt")
+
+
 RES_DIR = os.path.join(RESULTS, "embedded", "ideal_vs_vpd", "mechanism_forward")
 FIG_DIR = os.path.join(FIGURES, "embedded", "ideal_vs_vpd", "mechanism_forward")
 
@@ -77,8 +108,8 @@ M_SHOW = 5                                # equal-budget m for the spectra figur
 
 # ---------------------------------------------------------------- load + model
 
-def load():
-    ck = torch.load(CKPT, map_location="cpu", weights_only=False)
+def load(ckpt: str | None = None):
+    ck = torch.load(ckpt or CKPT, map_location="cpu", weights_only=False)
     t = {k: ck[k].double().numpy() for k in ("W_e", "W_in", "W_out", "C",
                                              "U", "S", "V", "L", "G")}
     t["M"] = np.asarray(ck["M"]).astype(bool)
@@ -150,9 +181,14 @@ def run_asserts(t: dict) -> list[str]:
     # column chain coefficients ARE the pre-activations (tiling trivially exact)
     lines.append("column chain: coefficients (a_j W_in)_n are the pre-activations "
                  "(identical forward by construction)")
-    # context: pre-activation vs designed code (G = I at d200)
-    lines.append(f"context      max|W_e W_in - C| = {np.abs(We @ Win - t['C']).max():.3e}"
-                 "  (G = I at d_emb=200 >= F)")
+    # context: pre-activation vs designed (G-projected) code
+    G = t["G"]
+    regime = ("G = I at d_emb >= F"
+              if d >= F else
+              f"rank-{min(F, d)} projector — off-code preactivations carry G-noise")
+    lines.append(f"context      max|W_e W_in - G C| = "
+                 f"{np.abs(We @ Win - G @ t['C']).max():.3e}"
+                 f"  (G = W_e W_e^T, mean G_jj = {np.diag(G).mean():.3f}; {regime})")
     return lines
 
 
@@ -260,8 +296,10 @@ def fmt_int_stats(v: np.ndarray) -> str:
 def write_results(t, assert_lines, E, pr, nth, trunc, mstats) -> None:
     os.makedirs(RES_DIR, exist_ok=True)
     cfg = t["cfg"]
-    # ---- activity.csv (long format, per feature per ontology)
-    csv_path = os.path.join(RES_DIR, "activity.csv")
+    # ---- activity CSV (long format, per feature per ontology; d200's original
+    # run predates the suffix and lives at activity.csv — left untouched)
+    csv_path = os.path.join(RES_DIR, "activity.csv" if D_EMB == 200
+                            else f"activity_d{D_EMB}.csv")
     cols = ["ontology", "j", "pr", "n50", "n90", "n99", "m_spike_1pct", "m_leak_10pct"]
     with open(csv_path, "w") as f:
         f.write(",".join(cols) + "\n")
@@ -283,7 +321,7 @@ def write_results(t, assert_lines, E, pr, nth, trunc, mstats) -> None:
           "## Exactness asserts (identities, not findings)", ""]
     md += ["```"] + assert_lines + ["```", ""]
     md += ["## Activity census (no cutoffs: PR + multi-threshold counts)", "",
-           "Energies per feature j: rows (W_e[j])_d^2 over 200 dims; columns "
+           f"Energies per feature j: rows (W_e[j])_d^2 over {D_EMB} dims; columns "
            "((a_j W_in))_n^2 over 50 neurons; SVD (s_k L_jk)^2 over 50 channels.",
            "",
            "| ontology | pieces | PR median (min–max) | n50 med (min–max) | "
@@ -319,7 +357,7 @@ def write_results(t, assert_lines, E, pr, nth, trunc, mstats) -> None:
              "pieces carry the mechanism — the census and the causal count "
              "disagree, and the truncated-forward fidelity is the discriminator.",
            ""]
-    md_path = os.path.join(RES_DIR, "census_d200.md")
+    md_path = os.path.join(RES_DIR, f"census_d{D_EMB}.md")
     with open(md_path, "w") as f:
         f.write("\n".join(md))
     print(f"saved {md_path}\nsaved {csv_path}")
@@ -622,16 +660,27 @@ def grid_regression_asserts(t: dict, sig: dict, coef: dict,
     assert np.array_equal(coef[("W_in", "output")] ** 2, E_old["columns"])
     lines.append("regression: W_in input/output cut census energies == existing "
                  "rows/columns census: bitwise PASS")
-    # W_in output-cut m* must reproduce the established columns result (m*=5
-    # for every feature; the untied truncation coincides with the tied one
-    # because dropped columns write exactly zero)
+    # W_in output-cut m*: at d_emb >= F (G = I) it must reproduce the
+    # established columns result (m*=5 for every feature; the untied
+    # truncation coincides with the tied one because dropped columns write
+    # exactly zero). Below F this is a REGIME REPORT, not an assert: G-noise
+    # sends off-code preactivations positive, so the causal count varies.
+    F = t["W_e"].shape[0]
+    exact_regime = t["W_e"].shape[1] >= F
     ms_s = m_star(trunc[("W_in", "output")]["spike"], SPIKE_TOL)
     ms_l = m_star(trunc[("W_in", "output")]["leak"], LEAK_TOL)
-    assert np.all(ms_s == 5) and np.all(ms_l == 5), \
-        f"W_in output-cut m* regression failed: spike {np.unique(ms_s)}, " \
-        f"leak {np.unique(ms_l)}"
-    lines.append("regression: W_in output-cut m* spike/leak = 5 for all 100 "
-                 "features (== established per-neuron columns result): PASS")
+    if exact_regime:
+        assert np.all(ms_s == 5) and np.all(ms_l == 5), \
+            f"W_in output-cut m* regression failed: spike {np.unique(ms_s)}, " \
+            f"leak {np.unique(ms_l)}"
+        lines.append("regression: W_in output-cut m* spike/leak = 5 for all 100 "
+                     "features (== established per-neuron columns result): PASS")
+    else:
+        lines.append(
+            f"regime report (d_emb < F, no assert): W_in output-cut m* spike "
+            f"med {int(np.median(ms_s))} ({ms_s.min()}–{ms_s.max()}), leak "
+            f"med {int(np.median(ms_l))} ({ms_l.min()}–{ms_l.max()}) "
+            f"(d200 reference: 5/5 for every feature)")
     # 2. dense-interface duality: the cut lives ON the interface, so the two
     # cells that cut the same interface give the SAME truncated forward
     for c1, c2 in ((("W_emb", "output"), ("W_in", "input")),
@@ -648,13 +697,26 @@ def grid_regression_asserts(t: dict, sig: dict, coef: dict,
     assert e_id < 1e-12, f"W_emb input-cut not an identity: {e_id:.3e}"
     lines.append(f"near-identity: W_emb input-cut errors <= {e_id:.1e} for ALL "
                  "m >= 1 (the active feature's row is the whole read): PASS")
-    F = t["W_e"].shape[0]
+    top_is_target = np.zeros(F, bool)
     for j in range(F):
         _, order = cell_y_cum(t, sig, "W_unemb", "output", j)
-        assert order[0] == j, f"unemb top piece != target readout for j={j}"
-    assert np.all(trunc[("W_unemb", "output")]["spike"][:, 0] == 0.0)
-    lines.append("near-identity: W_unemb output-cut top piece IS the target "
-                 "readout column j (spike error 0 at m=1) for all features: PASS")
+        top_is_target[j] = order[0] == j
+    if exact_regime:
+        assert top_is_target.all(), \
+            f"unemb top piece != target readout for j={np.nonzero(~top_is_target)[0]}"
+        assert np.all(trunc[("W_unemb", "output")]["spike"][:, 0] == 0.0)
+        lines.append("near-identity: W_unemb output-cut top piece IS the target "
+                     "readout column j (spike error 0 at m=1) for all features: "
+                     "PASS")
+    else:
+        n_top = int(top_is_target.sum())
+        sp1 = trunc[("W_unemb", "output")]["spike"][top_is_target, 0]
+        sp1_max = sp1.max() if sp1.size else float("nan")
+        lines.append(
+            f"regime report (d_emb < F, no assert): W_unemb output-cut top "
+            f"piece is the target readout for {n_top}/{F} features (spike "
+            f"error at m=1 is 0 for those; max {sp1_max:.1e}) "
+            f"(d200 reference: {F}/{F})")
     # 4. v-invariance (positively homogeneous chain): m* identical at v=1 and
     # v=2.5 for every cell. (The error CURVES can differ inside groups of
     # exactly-tied coefficients — the designed code has 5 equal on-code
@@ -676,7 +738,12 @@ def grid_regression_asserts(t: dict, sig: dict, coef: dict,
 # ------------------------------------------------------------- grid reporting
 
 def grid_verdicts(mstats: dict) -> tuple[list[str], dict]:
-    """Per-matrix verdict lines + summary dict {mat: (winner, ok_side, ok_m)}."""
+    """Per-matrix verdict lines + summary dict {mat: (winner, ok_side, ok_m)}.
+    At d_emb < F the GRID_PRED counts are the d200 REFERENCE, not predictions
+    — deviations are reported (expected knee-softening), not failures."""
+    exact_regime = D_EMB >= 100
+    miss = "FAILED" if exact_regime else "DEVIATES from d200 (reported)"
+    pred_word = "predicted" if exact_regime else "d200-reference"
     lines, summary = [], {}
     for mat in GRID_MATRICES:
         pred_side, pred_m = GRID_PRED[mat]
@@ -693,21 +760,22 @@ def grid_verdicts(mstats: dict) -> tuple[list[str], dict]:
                             w_leak=w_leak, ok_side=ok_side,
                             ok_spike=ok_spike, ok_leak=ok_leak)
         lines.append(
-            f"- **{mat}** — predicted winner: {pred_side}-side at m*={pred_m}. "
+            f"- **{mat}** — {pred_word} winner: {pred_side}-side at m*={pred_m}. "
             f"Actual winner: **{winner}-side** (combined median m* "
             f"{med[winner]} vs {med['output' if winner == 'input' else 'input']}"
             f" for the loser); winner m* spike/leak = {w_spike}/{w_leak}. "
-            f"Side prediction {'CONFIRMED' if ok_side else 'FAILED'}; "
-            f"count prediction spike {'CONFIRMED' if ok_spike else 'FAILED'}, "
-            f"leak {'CONFIRMED' if ok_leak else 'FAILED'}.")
+            f"Side prediction {'CONFIRMED' if ok_side else miss}; "
+            f"count prediction spike {'CONFIRMED' if ok_spike else miss}, "
+            f"leak {'CONFIRMED' if ok_leak else miss}.")
     return lines, summary
 
 
 def write_grid_results(t, tiling_lines, reg_lines, coef, pr, nth, mstats,
-                       verdict_lines, summary) -> None:
+                       verdict_lines, summary, npos=None) -> None:
     os.makedirs(RES_DIR, exist_ok=True)
     cfg = t["cfg"]
     F = t["W_e"].shape[0]
+    exact_regime = t["W_e"].shape[1] >= F
     # ---- cutside_grid_d200.csv (long format)
     csv_path = os.path.join(RES_DIR, f"cutside_grid_d{D_EMB}.csv")
     with open(csv_path, "w") as f:
@@ -734,8 +802,21 @@ def write_grid_results(t, tiling_lines, reg_lines, coef, pr, nth, mstats,
           "(untied; unlike the default run's tied truncation).", "",
           "**Principle under test:** decompose each layer on the side where "
           "its own weights re-concentrate the signal into discrete events; "
-          "never cut along a dense interface.", "",
-          "## Tiling + regression asserts (identities, not findings)", "",
+          "never cut along a dense interface.", ""]
+    if not exact_regime and npos is not None:
+        G = t["G"]
+        md += [
+            f"**Regime (d_emb = {D_EMB} < F = {F}):** W_e W_in = G C with "
+            f"G = W_e W_e^T a rank-{t['W_e'].shape[1]} projector (mean G_jj = "
+            f"{np.diag(G).mean():.3f}, max |W_e W_in - G C| = "
+            f"{np.abs(t['W_e'] @ t['W_in'] - G @ t['C']).max():.1e}). Off-code "
+            "preactivations go positive through G-noise: the causal count "
+            f"#(pre > 0) per feature is median {int(np.median(npos))} "
+            f"({npos.min()}–{npos.max()}) vs exactly K = {cfg['K']} at d200, "
+            f"and {int((npos != cfg['K']).sum())}/{F} features deviate from K. "
+            "The d200 counts {1,5,5,1} are the REFERENCE here, not asserted "
+            "predictions — knees are expected to soften.", ""]
+    md += ["## Tiling + regression asserts (identities, not findings)", "",
           "```"] + tiling_lines + [""] + reg_lines + ["```", "",
           "## Activity census (no cutoffs: PR + multi-threshold counts)", "",
           "| matrix | cut side | pieces | coefficient | PR med (min–max) | "
@@ -761,15 +842,52 @@ def write_grid_results(t, tiling_lines, reg_lines, coef, pr, nth, mstats,
                   f"{coef[cell].shape[1]} | "
                   f"{fmt_int_stats(mstats[cell]['spike'])} | "
                   f"{fmt_int_stats(mstats[cell]['leak'])} |")
-    md += ["", "## Verdicts (predictions: W_emb input m*=1; W_in output m*=5; "
+    pred_word = "predictions" if exact_regime else "d200-reference counts"
+    md += ["", f"## Verdicts ({pred_word}: W_emb input m*=1; W_in output m*=5; "
            "W_out input m*=5; W_unemb output m*=1)", ""] + verdict_lines
     n_side = sum(s["ok_side"] for s in summary.values())
     n_spike = sum(s["ok_spike"] for s in summary.values())
     n_leak = sum(s["ok_leak"] for s in summary.values())
     md += ["", "## Overall", "",
-           f"Winner-side predictions confirmed: {n_side}/4. Winner-count "
-           f"predictions: spike {n_spike}/4, leak {n_leak}/4.", "",
-           "Reading the one deviating number (W_unemb output-cut leak m*): at "
+           f"Winner-side {pred_word} confirmed: {n_side}/4. Winner-count "
+           f"matches: spike {n_spike}/4, leak {n_leak}/4.", ""]
+    if not exact_regime:
+        m8 = {(mat, s): (int(np.median(mstats[(mat, s)]["spike"])),
+                         int(np.median(mstats[(mat, s)]["leak"])))
+              for mat in GRID_MATRICES for s in GRID_SIDES}
+        y_n99 = nth[("W_unemb", "output")][0.99]
+        md += [
+            "d50 contrast with the d200 grid: the exact d200 counts "
+            "{1,5,5,1} are a G = I artifact; the re-concentration reading "
+            "survives where the signal is genuinely evented (W_emb, W_out "
+            "input; W_in output beats its dense-interface rival). The one "
+            "side FLIP, W_unemb, is the d200-diagnosed criterion artifact "
+            "now dominating the combined median: the output cut's spike m* "
+            "is still 1 for every feature (the top piece IS the target "
+            "readout, 100/100), but its leak m* "
+            f"({int(np.median(mstats[('W_unemb', 'output')]['leak']))}, "
+            f"vs y-census n99 = {int(np.median(y_n99))}) is a support census "
+            "of the now-broadband G-noise leak, which at d50 exceeds the "
+            "dense-interface cost. d200-reference median m* at d50: "
+            f"W_emb input {m8[('W_emb', 'input')][0]}/{m8[('W_emb', 'input')][1]}"
+            f" (d200: 1/1), W_in output {m8[('W_in', 'output')][0]}/"
+            f"{m8[('W_in', 'output')][1]} (d200: 5/5), W_out input "
+            f"{m8[('W_out', 'input')][0]}/{m8[('W_out', 'input')][1]} "
+            f"(d200: 5/5), W_unemb output {m8[('W_unemb', 'output')][0]}/"
+            f"{m8[('W_unemb', 'output')][1]} (d200: 1/98). W_emb input stays "
+            "exact at any d (the probe is 1-sparse). For W_in/W_out the knee "
+            "softens because G-noise sends off-code preactivations positive "
+            "(causal count above; note the |coefficient| ranking also spends "
+            "slots on large-|negative| dead pieces for the W_in output cut). "
+            "Full per-feature spread is in the fidelity table above and the "
+            "CSV.", ""]
+        md_path = os.path.join(RES_DIR, f"cutside_grid_d{D_EMB}.md")
+        with open(md_path, "w") as f:
+            f.write("\n".join(md))
+        print(f"saved {md_path}\nsaved {csv_path}")
+        print("\n".join(md))
+        return
+    md += ["Reading the one deviating number (W_unemb output-cut leak m*): at "
            "the FINAL matrix the output-side cut is coordinate-aligned with "
            "the error metric itself — dropping a piece deletes that output "
            "coordinate outright, so leak fidelity degenerates into a census "
@@ -821,7 +939,8 @@ def plot_grid(trunc, mstats) -> None:
                         ls="--", alpha=0.6, label=f"{side}-side (worst feature)")
             ax.axvline(pred_m, color=SIDE_COLOR[pred_side], lw=1, ls=":",
                        alpha=0.9)
-            ax.annotate(f"pred: {pred_side} m*={pred_m}", (pred_m, floor * 30),
+            pred_tag = "pred" if D_EMB >= 100 else "d200 ref"
+            ax.annotate(f"{pred_tag}: {pred_side} m*={pred_m}", (pred_m, floor * 30),
                         fontsize=7.5, color=SIDE_COLOR[pred_side], rotation=90,
                         ha="right", va="bottom")
             ax.axhline(tol, color="k", lw=0.8, ls=":")
@@ -878,10 +997,195 @@ def grid_main() -> None:
     reg_lines = grid_regression_asserts(t, sig, coef, trunc)
     print("\n".join(reg_lines))
 
+    npos = (sig["PRE"] > 0).sum(1)
+    print(f"\ncausal count #(pre>0) per feature: median {int(np.median(npos))} "
+          f"({npos.min()}–{npos.max()}); K = {t['cfg']['K']}")
+
     verdict_lines, summary = grid_verdicts(mstats)
     write_grid_results(t, tiling_lines, reg_lines, coef, pr, nth, mstats,
-                       verdict_lines, summary)
+                       verdict_lines, summary, npos=npos)
     plot_grid(trunc, mstats)
+
+
+# ================================================================ solo spectra
+# (--spectra): winning-cut component convention, 1 + M_SHOW + M_SHOW + 1 pieces
+# per feature: W_emb row j, top-M_SHOW-by-|coefficient| W_in column pieces,
+# the same-neuron W_out row pieces (tied), and W_unemb column j.
+
+# Same example features as the d200 run: 0; 61 = a max-overlap partner of 0
+# (the ov=2 tie-set of feature 0 is {2, 61, 78, 96}; 61 was the d200 pick,
+# kept for comparability); 1 = the globally max-overlap feature (ov=3).
+SPECTRA_FEATURES = (0, 61, 1)
+
+
+def solo_mechanism(t: dict, j: int, m_keep: int = M_SHOW):
+    """Winning-cut solo mechanism for feature j on probe e_j (v=1).
+    Returns (keep, pre, z, y_strict, y_fullread): keep = kept neuron indices;
+    y_strict = the mechanism's own spectrum (W_unemb column j writes ONLY
+    output j, so off-target is structurally 0); y_fullread = the retained
+    write z read through the FULL unembed bank (diagnostic: where G-noise
+    through the retained pieces would land — NOT part of the mechanism)."""
+    We, Win = t["W_e"], t["W_in"]
+    a = We[j]                                     # W_emb row j piece
+    pre = a @ Win                                 # column-piece coefficients
+    keep = np.argsort(-np.abs(pre), kind="stable")[:m_keep]
+    h = relu(pre)
+    z = Win[:, keep] @ h[keep]                    # same-neuron W_out rows
+    y_strict = np.zeros(We.shape[0])
+    y_strict[j] = z @ We[j]                       # W_unemb column j
+    y_fullread = z @ We.T
+    return keep, pre, z, y_strict, y_fullread
+
+
+def leak_ladder(t: dict, Y: np.ndarray, j: int) -> dict[int, np.ndarray]:
+    """Off-target output values of the FULL model on probe e_j grouped by
+    codeword overlap m_ov(j, i)."""
+    M = t["M"].astype(int)
+    ov = M @ M.T
+    out = {}
+    for m in sorted(set(int(v) for i, v in enumerate(ov[j]) if i != j)):
+        idx = [i for i in range(Y.shape[1]) if i != j and ov[j, i] == m]
+        out[m] = Y[j, idx]
+    return out
+
+
+def plot_spectra_solo(t, Y, js, mech) -> None:
+    """d200-style panel: per feature a full-model spectrum (top) and the
+    strict 1+5+5+1 mechanism spectrum (bottom)."""
+    os.makedirs(FIG_DIR, exist_ok=True)
+    F = t["W_e"].shape[0]
+    fig, axes = plt.subplots(2, len(js), figsize=(4.8 * len(js), 6.4),
+                             constrained_layout=True, sharey="row")
+    axes = np.atleast_2d(axes)
+    for c, j in enumerate(js):
+        colors = ["tab:red" if i == j else "steelblue" for i in range(F)]
+        _, _, _, y_strict, y_fullread = mech[j]
+        off = np.ones(F, bool); off[j] = False
+        ax = axes[0, c]
+        ax.bar(range(F), Y[j], width=1.0, color=colors)
+        ax.axhline(0, color="k", lw=0.5)
+        ax.set_title(f"e_{j} — full model", fontsize=10)
+        ax = axes[1, c]
+        ax.bar(range(F), y_strict, width=1.0, color=colors)
+        ax.axhline(0, color="k", lw=0.5)
+        ax.set_title(f"e_{j} — mechanism (1+{M_SHOW}+{M_SHOW}+1 pieces)\n"
+                     f"spike {y_strict[j]:.3f}; full-read leak max "
+                     f"{np.abs(y_fullread[off]).max():.3f}", fontsize=9)
+        ax.set_xlabel("output feature")
+    axes[0, 0].set_ylabel("output")
+    axes[1, 0].set_ylabel("output")
+    fig.suptitle(f"Mechanism solo forward vs full model (designed sandwich "
+                 f"d{D_EMB}, v=1; red = probed feature)", fontsize=12)
+    path = os.path.join(FIG_DIR, f"mechanism_spectra_d{D_EMB}.png")
+    fig.savefig(path, dpi=140, bbox_inches="tight"); plt.close(fig)
+    print(f"  saved {path}")
+
+
+def spectra_main() -> None:
+    t = load()
+    print(f"loaded {CKPT}  cfg={t['cfg']}")
+    We, Win, G, cfg = t["W_e"], t["W_in"], t["G"], t["cfg"]
+    F = We.shape[0]
+    K, a_amp = cfg["K"], cfg["a"]
+    exact_regime = We.shape[1] >= F
+    Y = full_forward(We, Win)
+    M = t["M"].astype(int)
+    ov = M @ M.T; np.fill_diagonal(ov, 0)
+    js = list(SPECTRA_FEATURES)
+    assert ov[js[0], js[1]] == ov[js[0]].max(), "pick 2 not a max-overlap partner"
+    assert ov[js[2]].max() == ov.max(), "pick 3 not globally max-overlap"
+
+    # reference d200 model (in memory only — d200 outputs untouched)
+    t_ref = None
+    if not exact_regime:
+        t_ref = load(os.path.join(CHECKPOINTS, "embedded_ideal", "ideal_d200.pt"))
+        Y_ref = full_forward(t_ref["W_e"], t_ref["W_in"])
+
+    mech = {j: solo_mechanism(t, j) for j in js}
+    npos_all = (We @ Win > 0).sum(1)
+
+    md = [f"# Mechanism solo spectra — d_emb = {D_EMB} (winning-cut convention, "
+          f"1+{M_SHOW}+{M_SHOW}+1 pieces)", "",
+          f"Checkpoint: `checkpoints/embedded_ideal/ideal_d{D_EMB}.pt` "
+          f"(K={K}, p={cfg['p']}, a={a_amp:.4f}, b={cfg['b']:.4f}). "
+          "Convention (per probed feature j): W_emb row j + top-"
+          f"{M_SHOW}-by-|coefficient| W_in column pieces + the same-neuron "
+          "W_out row pieces (tied) + W_unemb column j. Top-"
+          f"{M_SHOW} kept for d200 comparability.", ""]
+    if not exact_regime:
+        md += [f"**Regime:** W_e W_in = G C, G a rank-{We.shape[1]} projector "
+               f"(mean G_jj = {np.diag(G).mean():.3f}); the true causal count "
+               f"#(pre > 0) is median {int(np.median(npos_all))} "
+               f"({npos_all.min()}–{npos_all.max()}) over all {F} features — "
+               f"it differs from the kept {M_SHOW}.", ""]
+    md += ["Structural note: the strict convention's W_unemb piece (column j) "
+           "writes ONLY output coordinate j, so the strict mechanism spectrum "
+           "has off-target EXACTLY 0 by construction at any d_emb. The "
+           "G-noise that flows through the retained pieces is therefore "
+           "measured at the retained write z read through the FULL unembed "
+           "bank (\"full-read leak\" below) — the leak the mechanism's pieces "
+           "hand to the other readout columns, which the strict piece set "
+           "discards.", "",
+           "## Per-probe numbers", "",
+           "| j | full spike | mech spike | spike err | mech off-max "
+           "(strict) | mech off-max (full-read) | full off-max | causal count "
+           "#(pre>0) | kept == on-code? |",
+           "|---|---|---|---|---|---|---|---|---|"]
+    for j in js:
+        keep, pre, z, y_strict, y_fullread = mech[j]
+        off = np.ones(F, bool); off[j] = False
+        oncode = set(np.nonzero(M[j])[0])
+        keepset = set(int(n) for n in keep)
+        agree = ("yes" if keepset == oncode else
+                 f"no ({len(keepset & oncode)}/{K} on-code)")
+        md.append(f"| {j} | {Y[j, j]:.4f} | {y_strict[j]:.4f} | "
+                  f"{abs(y_strict[j] - Y[j, j]) / abs(Y[j, j]):.2e} | 0 (structural) | "
+                  f"{np.abs(y_fullread[off]).max():.4f} | "
+                  f"{np.abs(Y[j, off]).max():.4f} | {int(npos_all[j])} | "
+                  f"{agree} |")
+    # ---- spike prediction: spike ~ K a^2 G_jj^2 (all features)
+    spikes = np.array([solo_mechanism(t, j)[3][j] for j in range(F)])
+    pred = K * a_amp ** 2 * np.diag(G) ** 2
+    ratio = spikes / pred
+    full_ratio = np.diag(Y) / pred
+    md += ["", "## Prediction check: spike ≈ K·a²·G_jj² (all features)", "",
+           f"K a² = {K * a_amp ** 2:.4f}. mech-spike / (K a² G_jj²): median "
+           f"{np.median(ratio):.3f} ({ratio.min():.3f}–{ratio.max():.3f}); "
+           f"full-spike / (K a² G_jj²): median {np.median(full_ratio):.3f} "
+           f"({full_ratio.min():.3f}–{full_ratio.max():.3f}). "
+           f"mech spike median {np.median(spikes):.4f} "
+           f"({spikes.min():.4f}–{spikes.max():.4f}).", ""]
+    # ---- leak ladder: full-model off-target values by overlap class
+    md += ["## Leak ladder (full model, off-target values by codeword overlap)",
+           "",
+           "| j | m_ov | n | mean | std | min–max |"
+           + (" d200 mean | d200 std |" if t_ref is not None else ""),
+           "|---|---|---|---|---|---|" + ("---|---|" if t_ref is not None else "")]
+    smear = []
+    for j in js:
+        lad = leak_ladder(t, Y, j)
+        lad_ref = leak_ladder(t_ref, Y_ref, j) if t_ref is not None else {}
+        for m, vals in sorted(lad.items()):
+            row = (f"| {j} | {m} | {len(vals)} | {vals.mean():.4f} | "
+                   f"{vals.std():.2e} | {vals.min():.4f}–{vals.max():.4f} |")
+            if t_ref is not None and m in lad_ref:
+                vr = lad_ref[m]
+                row += f" {vr.mean():.4f} | {vr.std():.2e} |"
+            md.append(row)
+            smear.append(vals.std())
+    if t_ref is not None:
+        md += ["", f"Smear verdict: max within-class std at d{D_EMB} = "
+               f"{max(smear):.3e} vs the d200 exact ladder (per-class std "
+               "~1e-16, machine zero) — "
+               + ("the ladder is SMEARED into bands."
+                  if max(smear) > 1e-10 else "no smearing detected."), ""]
+    md_path = os.path.join(RES_DIR, f"mechanism_spectra_d{D_EMB}.md")
+    os.makedirs(RES_DIR, exist_ok=True)
+    with open(md_path, "w") as f:
+        f.write("\n".join(md))
+    print(f"saved {md_path}")
+    print("\n".join(md))
+    plot_spectra_solo(t, Y, js, mech)
 
 
 # ------------------------------------------------------------------------ main
@@ -936,5 +1240,18 @@ if __name__ == "__main__":
     ap.add_argument("--grid", action="store_true",
                     help="run the cut-side principle grid (4 matrices x 2 cut "
                          "directions) instead of the default W_in-ontology census")
+    ap.add_argument("--spectra", action="store_true",
+                    help="run the mechanism solo spectra (winning-cut "
+                         "1+5+5+1 convention, example features)")
+    ap.add_argument("--d-emb", type=int, choices=(200, 50), default=200,
+                    help="checkpoint d_emb; outputs are suffixed _d{D} "
+                         "(default 200)")
     args = ap.parse_args()
-    grid_main() if args.grid else main()
+    assert not (args.grid and args.spectra), "--grid and --spectra are exclusive"
+    set_demb(args.d_emb)
+    if args.grid:
+        grid_main()
+    elif args.spectra:
+        spectra_main()
+    else:
+        main()

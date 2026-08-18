@@ -140,3 +140,40 @@ leak fidelity degenerates into a support census of the output's leak
 W_emb's 1/1 differs only because the probe itself is 1-sparse. Artifacts:
 `results|figures/embedded/ideal_vs_vpd/mechanism_forward/
 cutside_grid_d200.{md,csv,png}`.
+
+## Addendum — d50 reruns of the grid and the solo spectra: what survives without G = I
+
+Both experiments repeated at d_emb = 50 (`--d-emb 50`; outputs suffixed
+`_d50`, d200 artifacts untouched). The regime change is a single fact with
+many faces: W_e W_in = G C with G = W_e W_eᵀ a rank-50 projector (mean
+G_jj = 0.5), so off-code pre-activations go positive through G-noise and the
+causal count #(pre > 0) is median 21 (14–26) per feature instead of exactly
+K = 5. Everything that was an identity stays an identity (all 8 tilings
+bitwise, interface-duality pairs bitwise, W_emb input-cut exact, m*
+v-invariant); everything that was a G = I consequence is now reported, not
+asserted.
+
+**Grid:** winner sides 3/4; the {1,5,5,1} knees soften to {1, 34, 14,
+1-spike} (winner-side median m*; dense-interface cells at 40–43 of 50). The
+one flip, W_unemb, is the d200-diagnosed criterion artifact promoted to
+decisive: the output cut's spike m* is still 1 with the top piece = the
+target readout for 100/100 features, but its leak m* (75 ≈ y-census
+n99 = 73) is a support census of the now-broadband G-noise leak. The W_in
+output-cut m* (34) even overshoots the causal count (21) because the
+|coefficient| ranking spends slots on large-|negative| dead pieces — a
+ranking artifact worth remembering for any p>0-style importance ordering.
+
+**Solo spectra (1+5+5+1, features 0/61/1):** mech spike 0.148/0.083/0.130 vs
+full 0.203/0.177/0.190 (27–53% spike deficit — top-5 misses causal mass, and
+the kept top-5 is no longer the on-code set: 4/5, 3/5, 4/5). The strict
+mechanism's off-target is exactly 0 at any d (structural: the W_unemb
+column-j piece writes only coordinate j); the predicted nonzero G-noise leak
+appears at the retained write read through the full unembed bank (full-read
+leak max 0.117/0.088/0.122, same order as the full model's 0.114/0.153/0.096).
+The full model's leak ladder — exact rungs per overlap class at d200 —
+smears into overlapping bands (within-class std up to 4.5e-2 vs ~3e-16;
+probe 61 has an m_ov=1 leak above its m_ov=3 leak). Predictions on record:
+spike ≈ K a² G_jj² confirmed with spread (mech ratio med 1.061, 0.447–1.920);
+knee softening confirmed for ALL features; ladder smear confirmed. Artifacts:
+`results|figures/embedded/ideal_vs_vpd/mechanism_forward/
+{cutside_grid_d50.md/csv/png, mechanism_spectra_d50.md/png}`.
