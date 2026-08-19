@@ -1,0 +1,258 @@
+{
+ "tag": "klfree_learned_weighted",
+ "timestamp": "2026-08-19T13:32:07",
+ "config": {
+  "K": 5,
+  "family": "regular",
+  "code_seed": 0,
+  "swaps": 0,
+  "decoder": "transpose",
+  "p": "0.001",
+  "ab": [
+   0.3645663261413574,
+   -0.04756719991564751
+  ],
+  "C": 100,
+  "loss_kwargs": {
+   "alpha_faithfulness": 0.0,
+   "alpha_importance": 0.0001,
+   "alpha_stoch": 2.0,
+   "alpha_pgd": 2.0,
+   "pnorm": 2.0
+  },
+  "eval_pool": {
+   "seed": 777,
+   "n_batches": 50,
+   "batch": 8192
+  },
+  "init_seed": 0,
+  "ab_source": "learned_payload",
+  "ensemble": "learned_reference VPD, raw lower-CI-weighted gates"
+ },
+ "protocol": {
+  "eval_pool": {
+   "seed": 777,
+   "n_batches": 50,
+   "batch": 8192
+  },
+  "masks": "NONE -- deterministic mechanism ensembles, no stochastic/PGD masks",
+  "delta_excluded": true,
+  "routing": "all-component mode (no subset routing)",
+  "ci": "lower CI, deterministic; hard threshold ci > 0.1",
+  "histogram": {
+   "bins": 400,
+   "laplace": 1.0,
+   "range": "per class, min/max over full+all recons, 1% pad"
+  },
+  "gaussian_sigma_floor": 1e-09,
+  "coordinate_classes": {
+   "on_target": 41023,
+   "m1": 1318748,
+   "m2": 212022,
+   "m3": 23790,
+   "unrelated": 2310617
+  },
+  "max_overlap": 3,
+  "empty_samples_excluded_from_class_pools": true,
+  "sample_type_counts": {
+   "empty": 370538,
+   "single_active": 37157,
+   "multi_active": 1905
+  }
+ },
+ "semantics_checks": {
+  "closed_form_vs_explicit_rows": 8,
+  "n_single_active_probed": 64,
+  "single_active_on_target_max_dev": 5.960464477539063e-08,
+  "single_active_off_target_max_dev": 0.3492029309272766,
+  "single_active_full_match": false,
+  "hybrid_max_abs_dev_vs_full": 7.152557373046875e-07
+ },
+ "recon_mse_by_sample_type": {
+  "empty": {
+   "count": 370538,
+   "mse": 0.0
+  },
+  "single_active": {
+   "count": 37157,
+   "mse": 9.070239000474174e-05
+  },
+  "multi_active": {
+   "count": 1905,
+   "mse": 0.0003020316243484577
+  }
+ },
+ "per_class": {
+  "on_target": {
+   "count": 41023,
+   "err_mse": 0.002612889837353308,
+   "err_mean_abs": 0.039792265963049335,
+   "err_max_sq": 0.14198037981987,
+   "full_mean": 0.1387149691581726,
+   "full_std": 0.23632311820983887,
+   "recon_mean": 0.15111343562602997,
+   "recon_std": 0.21397894620895386
+  },
+  "m1": {
+   "count": 1318748,
+   "err_mse": 0.00010821365605249285,
+   "err_mean_abs": 0.007838448936439885,
+   "err_max_sq": 0.018130596727132797,
+   "full_mean": 0.009022754617035389,
+   "full_std": 0.027380580082535744,
+   "recon_mean": 0.013224869035184383,
+   "recon_std": 0.022174546495079994
+  },
+  "m2": {
+   "count": 212022,
+   "err_mse": 0.00041092297964530306,
+   "err_mean_abs": 0.015488605708154558,
+   "err_max_sq": 0.023496683686971664,
+   "full_mean": 0.041742391884326935,
+   "full_std": 0.07919391989707947,
+   "recon_mean": 0.04850124940276146,
+   "recon_std": 0.06983672082424164
+  },
+  "m3": {
+   "count": 23790,
+   "err_mse": 0.0009043647980880417,
+   "err_mean_abs": 0.022945206984094635,
+   "err_max_sq": 0.017523543909192085,
+   "full_mean": 0.07409553229808807,
+   "full_std": 0.13098472356796265,
+   "recon_mean": 0.0836922749876976,
+   "recon_std": 0.11772648245096207
+  },
+  "unrelated": {
+   "count": 2310617,
+   "err_mse": 1.5591169212618578e-05,
+   "err_mean_abs": 0.002773042740214248,
+   "err_max_sq": 0.002734534442424774,
+   "full_mean": -0.02316027507185936,
+   "full_std": 0.02780117280781269,
+   "recon_mean": -0.021039972081780434,
+   "recon_std": 0.02910785935819149
+  }
+ },
+ "kl_per_class": {
+  "on_target": {
+   "hist": {
+    "kl_full_recon": 1.6244899601316012,
+    "kl_recon_full": 1.7983694089528466,
+    "bins": 400,
+    "laplace": 1.0,
+    "range": [
+     -0.22018008975481987,
+     0.8820813402364254
+    ]
+   },
+   "gauss": {
+    "kl_full_recon": 0.012230578263749181,
+    "kl_recon_full": 0.010619159937763634,
+    "sigma_floor": 1e-09
+   }
+  },
+  "m1": {
+   "hist": {
+    "kl_full_recon": 1.965939289213823,
+    "kl_recon_full": 1.8968370795649894,
+    "bins": 400,
+    "laplace": 1.0,
+    "range": [
+     -0.14568638948893547,
+     0.1850346490571499
+    ]
+   },
+   "gauss": {
+    "kl_full_recon": 0.06940141655542864,
+    "kl_recon_full": 0.05060540446307804,
+    "sigma_floor": 1e-09
+   }
+  },
+  "m2": {
+   "hist": {
+    "kl_full_recon": 1.801933399335041,
+    "kl_recon_full": 1.7527819730767809,
+    "bins": 400,
+    "laplace": 1.0,
+    "range": [
+     -0.16895568473434447,
+     0.45286464793777464
+    ]
+   },
+   "gauss": {
+    "kl_full_recon": 0.0219067343430166,
+    "kl_recon_full": 0.018206350428342066,
+    "sigma_floor": 1e-09
+   }
+  },
+  "m3": {
+   "hist": {
+    "kl_full_recon": 1.6344496147174739,
+    "kl_recon_full": 1.894005867669315,
+    "bins": 400,
+    "laplace": 1.0,
+    "range": [
+     -0.13943862794137002,
+     0.5449762779304981
+    ]
+   },
+   "gauss": {
+    "kl_full_recon": 0.015566361799775219,
+    "kl_recon_full": 0.013303644074589505,
+    "sigma_floor": 1e-09
+   }
+  },
+  "unrelated": {
+   "hist": {
+    "kl_full_recon": 1.122257319462193,
+    "kl_recon_full": 1.973906076758744,
+    "bins": 400,
+    "laplace": 1.0,
+    "range": [
+     -0.18024567788636683,
+     0.04932719743049145
+    ]
+   },
+   "gauss": {
+    "kl_full_recon": 0.004699476921233514,
+    "kl_recon_full": 0.005083974791926793,
+    "sigma_floor": 1e-09
+   }
+  }
+ },
+ "verdict": {
+  "predictions": {
+   "user": "exact PD has bad KL, VPD's is lower",
+   "counter": "mask-free, exact PD is near-exact at p=0.001 (single-active solos reproduce the full output identically) and BEATS the VPD reconstructions, with its only error mass on multi-active interaction terms -- i.e. the 'bad KL' exists only under ablation-based masking"
+  },
+  "kl_full_recon_summary": {
+   "exact": {
+    "on_target": 0.022474559015567892,
+    "interference_mean": 7.072862379352002,
+    "unrelated": 10.413119349357673
+   },
+   "learned_hard": {
+    "on_target": 1.3686913055477339,
+    "interference_mean": 1.2283601278676768,
+    "unrelated": 1.0901369276661712
+   },
+   "learned_weighted": {
+    "on_target": 1.6244899601316012,
+    "interference_mean": 1.8007741010887794,
+    "unrelated": 1.122257319462193
+   },
+   "hybrid": {
+    "on_target": 0.0,
+    "interference_mean": 0.0,
+    "unrelated": 0.0
+   }
+  },
+  "best_learned_variant": "learned_hard",
+  "single_active_full_match": false,
+  "single_active_off_target_max_dev": 0.3492029309272766,
+  "user_prediction_held": true,
+  "counter_prediction_held": false,
+  "note": "adjudicated on hist KL(full||recon): 'user' holds iff exact's KL exceeds the best learned variant's on BOTH the interference-class mean (m>=1) and the unrelated class; 'counter' additionally requires the single-active full-output match it asserts."
+ }
+}

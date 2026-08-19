@@ -1,0 +1,175 @@
+{
+ "tag": "sweep_imp10_s0_warm",
+ "timestamp": "2026-08-19T13:25:42",
+ "config": {
+  "K": 5,
+  "family": "regular",
+  "code_seed": 0,
+  "swaps": 0,
+  "decoder": "transpose",
+  "p": "0.001",
+  "ab": [
+   0.3645663261413574,
+   -0.04756719991564751
+  ],
+  "C": 100,
+  "loss_kwargs": {
+   "alpha_faithfulness": 0.0,
+   "alpha_importance": 0.0001,
+   "alpha_stoch": 2.0,
+   "alpha_pgd": 2.0,
+   "pnorm": 2.0
+  },
+  "eval_pool": {
+   "seed": 777,
+   "n_batches": 25,
+   "batch": 8192
+  },
+  "init_seed": 0,
+  "ab_source": "learned_payload",
+  "components": "learned_sweep",
+  "gates": "learned_ci",
+  "imp_mult": 10.0,
+  "fit_seed": 0,
+  "fit_loss_kwargs": {
+   "alpha_faithfulness": 0.0,
+   "alpha_importance": 0.001,
+   "alpha_stoch": 2.0,
+   "alpha_pgd": 2.0,
+   "pnorm": 2.0
+  },
+  "resume_from": "sweep_imp10_s0",
+  "resume_checkpoint": "checkpoints/vpd_objective/sweep_imp10_s0.pt",
+  "resume_steps": 10000
+ },
+ "steps": 10000,
+ "losses": {
+  "total": 0.00010917160514509305,
+  "terms": {
+   "importance": {
+    "raw": 0.08359019070863724,
+    "weighted": 8.359019070863724e-06
+   },
+   "stoch_recon": {
+    "raw": 1.5505072624364403e-05,
+    "weighted": 3.1010145248728805e-05
+   },
+   "pgd_recon": {
+    "raw": 3.4901220496976746e-05,
+    "weighted": 6.980244099395349e-05
+   },
+   "faithful": {
+    "raw": 0.00048586903722025454,
+    "weighted": 0.0
+   }
+  },
+  "per_matrix": {
+   "importance": {
+    "w_in": 0.035020060390234,
+    "w_out": 0.048570130318403244
+   },
+   "stoch_recon": {
+    "w_in": 7.4597041384549815e-06,
+    "w_out": 1.6013891690818128e-05
+   }
+  }
+ },
+ "basis_metrics": {
+  "in": {
+   "act_purity": 0.8997311592102051,
+   "act_coverage": 86,
+   "mass_purity": 0.7717899084091187,
+   "match_agree": 0.89,
+   "row_entropy": 0.797965943813324,
+   "split": 7
+  },
+  "out": {
+   "act_purity": 0.33000364899635315,
+   "act_coverage": 42,
+   "mass_purity": 0.15798117220401764,
+   "match_agree": 0.56,
+   "row_entropy": 3.550088405609131,
+   "split": 0
+  },
+  "index_agreement": 0.0,
+  "dead_components": 0,
+  "neuron_basis": {
+   "w_in": {
+    "alive": 100,
+    "neuron_conc": 0.2063259669393301,
+    "neurons_covered": 45
+   },
+   "w_out": {
+    "alive": 100,
+    "neuron_conc": 0.25580582685768605,
+    "neurons_covered": 47
+   }
+  },
+  "ci_stats": {
+   "w_in": {
+    "ci_l0": 0.060302734375,
+    "n_alive_union": 83,
+    "pr_mean_ci": 57.45146942138672
+   },
+   "w_out": {
+    "ci_l0": 0.198974609375,
+    "n_alive_union": 59,
+    "pr_mean_ci": 49.97520065307617
+   },
+   "headline": {
+    "ci_l0": 0.198974609375,
+    "n_alive_union": 83,
+    "pr_mean_ci": 57.45146942138672
+   }
+  }
+ },
+ "sweep_basis": {
+  "F": 100,
+  "d_mlp": 50,
+  "alive_frac": 0.1,
+  "read": {
+   "alive": 100,
+   "feature_conc": {
+    "min": 0.24570640921592712,
+    "median": 0.9680631756782532,
+    "mean": 0.8576638698577881,
+    "max": 0.9962877035140991
+   },
+   "feature_coverage": 93
+  },
+  "write_neuron": {
+   "alive": 60,
+   "neuron_conc": {
+    "min": 0.3317161500453949,
+    "median": 0.5233326554298401,
+    "mean": 0.5658751130104065,
+    "max": 0.9555564522743225
+   },
+   "neuron_coverage": 44
+  },
+  "write_feature": {
+   "u_row_feature_conc": {
+    "min": 0.2918390929698944,
+    "median": 0.5027453899383545,
+    "mean": 0.4959537386894226,
+    "max": 0.6325871348381042
+   },
+   "vcol_wout_cos": {
+    "min": 0.5140550136566162,
+    "median": 0.6393477320671082,
+    "mean": 0.6463095545768738,
+    "max": 0.7908377051353455
+   },
+   "feature_coverage": 59
+  },
+  "verdict": "mixed",
+  "verdict_thresholds": {
+   "alive_frac": 0.1,
+   "collapsed_alive_out_frac_dmlp": 0.5,
+   "collapsed_alive_in_frac_F": 0.5,
+   "conc_hi": 0.8,
+   "coverage_frac": 0.8
+  }
+ },
+ "checkpoint": "checkpoints/vpd_objective/sweep_imp10_s0_warm.pt"
+}

@@ -57,8 +57,15 @@ L4-family regime in which the code exists.
 = (sparse read row: feature j's codeword row of w_in) ⊕ (write column j of
 w_out). Faithfulness is exact by construction (components tile both matrices);
 each piece is rank-1; minimality holds in the **self-activation sense**: the
-solo forward of component j reproduces the model's spike *and feature j's own
-leak* — interference is attributed to the feature that causes it.
+solo forward of component j reproduces the model's on-target spike exactly and
+is leak-free (component j writes only coordinate j). A consequence measured
+mask-free (klfree eval): the union of active exact components therefore cannot
+emit the interference the model produces on inactive coordinates — the
+per-feature write basis is distributionally inexpressive off-target
+(KL(full||exact) ≈ 7-10 on interference classes vs ≈ 1.1 for the learned
+neuron-basis solution, which traces the full output distribution; the oracle
+neuron-basis ensemble is distributionally exact). VPD's preference is thus
+not only a pricing fact but an expressivity fact about output distributions.
 
 **Embedded code (layer-local ideal PD).** Requiring each layer to be
 decomposed using only its own weights (no cross-layer knowledge, fixed before

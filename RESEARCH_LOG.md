@@ -512,3 +512,45 @@ each model (`toys/<name>/MEMO.md`); this file records what was done and when.
   {census.md, ramp_analysis.md, ramp_analysis_bias.md}; figures/
   {transfer_curves,bypass,unit_roles}_bias.png + control figures + census_*.
   Not committed; MEMO.md still deferred.
+
+## 2026-08-19 — mask-free distributional eval (--kl-eval): ExactPD's "bad KL" is real WITHOUT masks, but it is all off-target interference noise; the neuron-basis hybrid is distributionally EXACT
+- Added --kl-eval to biregular/vpd_objective.py: NO masks anywhere — each
+  decomposition reconstructs the frozen K=5-transpose p=0.001 model's output as
+  a deterministic ensemble of its currently-active mechanisms on one fixed pool
+  (CleanDataset seed 777, 50x8192 = 409,600 samples; 370,538 empty / 37,157
+  single-active / 1,905 multi-active). Ensembles: exact = sum of SOLO ExactPD
+  per-feature component forwards over active features (closed form, verified
+  against ExactPD._component_weight); learned_hard / learned_weighted = the
+  saved learned_reference VPD with deterministic lower-CI gates (ci>0.1 hard vs
+  ci-weighted), delta EXCLUDED, no routing; hybrid = exact-read/split-neuron-
+  write pieces under oracle activity (neuron fires). Coordinate classes from
+  the code matrix M: on-target / max-overlap m=1..3 (max off-diag overlap of
+  this code is 3, not 4) / unrelated; empty samples excluded from class pools.
+- SEMANTICS SURPRISE (kills the counter-prediction's premise): single-active
+  solos do NOT reproduce the full output. On-target they match to float
+  precision (dev 6e-8, asserted), but ExactPD component j WRITES ONLY
+  coordinate j, so the full model's interference noise on inactive coordinates
+  (rungs m*a^2+(K-m)*ab, up to 0.349 here) is structurally absent from the
+  solo ensemble. The exact recon at every off-target class is a delta at 0.
+- (a) recon MSE vs full: exact 1.55e-3 single / 3.19e-3 multi; learned_hard
+  6.9e-5 / 2.5e-4; learned_weighted 9.1e-5 / 3.0e-4; hybrid 3e-17 / 3e-16
+  (machine precision; max|dev| 7e-7). Per class, exact is BEST on-target
+  (2.7e-4 vs learned_hard 1.8e-3) and worst everywhere else (m2 8.0e-3,
+  m3 2.3e-2, unrelated 1.3e-3 vs learned_hard 3.2e-4/7.0e-4/8.2e-6).
+- (b) hist KL(full||recon), 400 bins, Laplace 1.0: exact on_target 0.022 but
+  m1/m2/m3/unrelated 9.3/7.2/4.7/10.4; learned_hard ~1.1-1.4 everywhere
+  (incl. on_target 1.37 — worse than exact there); learned_weighted slightly
+  worse; hybrid 0.000 in every class/direction. Gaussian-fit KL agrees
+  (exact's off-target sigma=0 delta blows up at the 1e-9 floor — reported
+  verbatim, use the hist numbers).
+- VERDICT: [USER] "exact PD has bad KL, VPD's lower" HELD on the interference
+  classes and unrelated (adjudication rule in the records); [COUNTER] FAILED —
+  both its premise (single-active full match) and its conclusion (exact beats
+  VPD) are false off-target. The honest split: exact PD wins on-target,
+  loses everywhere it structurally cannot write; and the "bad KL" does NOT
+  need ablation masking — a mask-free mechanism ensemble shows it. The real
+  winner is the write-basis: oracle-gated NEURON-basis pieces reproduce the
+  full distribution exactly (active neuron rows tile h @ w_out identically).
+- Artifacts: results/vpd_objective/runs/klfree_{exact,learned_hard,
+  learned_weighted,hybrid}.json; figures/vpd_objective/klfree_comparison.png;
+  write_index now skips the klfree_* schema. Not committed.

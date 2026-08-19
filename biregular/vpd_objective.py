@@ -64,6 +64,22 @@ stars at the same multiplier.
   ./.venv/bin/python -m biregular.vpd_objective --sweep-cell --imp-mult 30 \
       --resume-from sweep_imp30_s0 --steps 10000    # -> sweep_imp30_s0_warm
   ./.venv/bin/python -m biregular.vpd_objective --phase-figure
+  ./.venv/bin/python -m biregular.vpd_objective --kl-eval   # mask-free distributional eval
+
+--kl-eval (mask-free distributional evaluation): NO masks anywhere -- each
+decomposition reconstructs the model output as a deterministic ensemble of its
+currently-active mechanisms on one fixed pool (CleanDataset p, seed 777,
+50 x 8192), and is scored against the FULL model output by (a) reconstruction
+MSE split by sample type (empty / single-active / multi-active) and per
+coordinate-class (on-target / codeword-overlap classes m=1..max / unrelated,
+from the code matrix M), and (b) marginal output-distribution KL per
+coordinate-class (smoothed fine histograms both directions + Gaussian-fit KL).
+Ensembles: exact = sum of SOLO ExactPD per-feature component forwards over
+active features; learned_hard / learned_weighted = the saved learned_reference
+VPD run with deterministic lower-CI gates (hard ci > 0.1 selection vs
+ci-weighted), delta EXCLUDED; hybrid = the hybrid pieces under oracle activity
+(neuron fires). Writes runs/klfree_{exact,learned_hard,learned_weighted,
+hybrid}.json + figures/vpd_objective/klfree_comparison.png.
 """
 import argparse
 import glob
@@ -81,7 +97,7 @@ from biregular.component_match import (activation_matrices, hungarian_match, mas
 from core.data import CleanDataset
 from core.paths import CHECKPOINTS, FIGURES, RESULTS
 from core.pd import ExactPD
-from core.vpd import VPD
+from core.vpd import CI_ALIVE_THRESHOLD, VPD
 
 F = 100
 P_DEFAULT = "0.001"
@@ -525,6 +541,8 @@ def write_index() -> None:
     for path in paths:
         with open(path) as f:
             r = json.load(f)
+        if "losses" not in r:   # klfree_* distributional records: different schema
+            continue
         lo, pm, bm = r["losses"], r["losses"]["per_matrix"], r.get("basis_metrics", {})
         t = lo["terms"]
         ci_l0 = bm.get("ci_stats", {}).get("headline", {}).get("ci_l0", float("nan"))
@@ -540,7 +558,7 @@ def write_index() -> None:
     os.makedirs(RES_DIR, exist_ok=True)
     with open(INDEX_PATH, "w") as f:
         f.write("\n".join(lines) + "\n")
-    print(f"  index ({len(paths)} runs) -> {INDEX_PATH}")
+    print(f"  index ({len(lines) - 6} runs) -> {INDEX_PATH}")
 
 
 def print_comparison(records: list[dict]) -> None:
@@ -557,6 +575,421 @@ def print_comparison(records: list[dict]) -> None:
     print("\n" + " " * (w + 2) + "  ".join(f"{t:>18}" for t in tags))
     for name, fn in rows:
         print(f"  {name:<{w}}" + "  ".join(f"{fn(r['losses']):>18.4e}" for r in records))
+
+
+# ------------------------------------- mask-free distributional eval (--kl-eval)
+
+KLFREE_BATCHES = 50        # fixed pool: KLFREE_BATCHES x --batch (~50 x 8192)
+KLFREE_BINS = 400          # fine histogram bins per coordinate-class (verbatim in record)
+KLFREE_LAPLACE = 1.0       # Laplace pseudo-count added to EVERY bin (verbatim in record)
+KLFREE_SIGMA_FLOOR = 1e-9  # Gaussian-fit sigma floor (degenerate delta distributions)
+KLFREE_NAMES = ("exact", "learned_hard", "learned_weighted", "hybrid")
+ON_TARGET = 99             # coordinate-class code for currently-active coordinates
+KLFREE_FIG = os.path.join(FIG_DIR, "klfree_comparison.png")
+
+KLFREE_PREDICTIONS = {
+    "user": "exact PD has bad KL, VPD's is lower",
+    "counter": ("mask-free, exact PD is near-exact at p=0.001 (single-active solos "
+                "reproduce the full output identically) and BEATS the VPD "
+                "reconstructions, with its only error mass on multi-active "
+                "interaction terms -- i.e. the 'bad KL' exists only under "
+                "ablation-based masking"),
+}
+
+
+def _coord_classes(x: torch.Tensor, ov_offdiag: torch.Tensor, max_ov: int) -> torch.Tensor:
+    """(B, F) long class codes per (sample, coordinate): ON_TARGET where the
+    coordinate's feature is active in the sample; otherwise the MAXIMUM codeword
+    overlap m (1..max_ov, from the code matrix M) between the coordinate and any
+    active feature; 0 = unrelated. Empty samples come out all-0 (callers exclude
+    them from class pooling)."""
+    active = x != 0
+    af = active.float()
+    cls = torch.zeros(x.shape, dtype=torch.long, device=x.device)
+    for m in range(1, max_ov + 1):        # ascending: higher m overwrites -> max
+        cls[(af @ (ov_offdiag == m).float()) > 0] = m
+    cls[active] = ON_TARGET
+    return cls
+
+
+def _exact_solo_recon(model, x: torch.Tensor) -> torch.Tensor:
+    """Sum of SOLO ExactPD component forwards over the currently-active features.
+    Solo j = relu(x_j * w_in[j, :]) @ w_out[:, j] written on coordinate j only
+    (ExactPD piece j: P_in[j] = e_j (x) w_in[j,:], P_out[j] = w_out[:,j] (x) e_j,
+    so component j reads feature j and WRITES ONLY coordinate j). Closed form via
+    relu(c*w) = relu(c)*relu(w) + relu(-c)*relu(-w):
+        recon[:, j] = relu(x_j) * (relu(w_in[j])@w_out[:,j])
+                    + relu(-x_j) * (relu(-w_in[j])@w_out[:,j]).
+    Inactive features (x_j == 0) contribute exactly 0, so no activity mask is
+    needed; verified against the explicit component matrices in
+    _exact_semantics_checks."""
+    gp = (torch.relu(model.w_in) * model.w_out.T).sum(dim=1)    # (F,)
+    gm = (torch.relu(-model.w_in) * model.w_out.T).sum(dim=1)   # (F,)
+    return torch.relu(x) * gp + torch.relu(-x) * gm
+
+
+def _vpd_ci_recon(pd_v: VPD, x: torch.Tensor, mode: str) -> torch.Tensor:
+    """Deterministic mask-free reconstruction from a VPD state: gates are the
+    LOWER CI values evaluated on the frozen model's activations (no stochastic
+    sampling, no PGD), the weight delta is EXCLUDED (delta mask = 0 -- the delta
+    is spillover, not a mechanism), and no subset routing (both matrices run in
+    component mode). mode = 'hard' thresholds ci > CI_ALIVE_THRESHOLD; 'weighted'
+    uses the raw ci values as contributions (for oracle gates these coincide)."""
+    assert mode in ("hard", "weighted"), mode
+    model = pd_v.model
+    with torch.no_grad():
+        e = model.embed_input(x)
+        h = torch.relu(e @ pd_v.targets["w_in"])
+        lower, _ = pd_v._ci(e, h)
+        masks = {n: ((ci > CI_ALIVE_THRESHOLD).float() if mode == "hard" else ci)
+                 for n, ci in lower.items()}
+        zeros = {n: torch.zeros(x.shape[0], device=x.device) for n in lower}
+        return pd_v._forward_masked_vpd(x, masks, zeros, None)
+
+
+def _exact_semantics_checks(model, x: torch.Tensor, y: torch.Tensor) -> dict:
+    """Verify the closed-form solo reconstruction against ExactPD's explicit
+    component matrices, and TEST (not assume) the on-record claim that on
+    single-active inputs the solo forward equals the full output exactly. The
+    on-target coordinate must match to float precision (asserted); the full
+    output vector may not -- component j writes only coordinate j, so the full
+    model's interference noise on INACTIVE coordinates is absent from the solo
+    reconstruction. The record carries the measured deviation either way."""
+    pd_e = ExactPD(model)
+    recon = _exact_solo_recon(model, x)
+    nact = (x != 0).sum(dim=1)
+    rows = torch.nonzero(nact > 0).flatten()[:8]
+    for b in rows.tolist():                    # closed form == explicit solo sum
+        explicit = torch.zeros_like(x[b:b + 1])
+        for j in torch.nonzero(x[b]).flatten().tolist():
+            explicit = explicit + torch.relu(
+                x[b:b + 1] @ pd_e._component_weight("w_in", j)
+            ) @ pd_e._component_weight("w_out", j)
+        assert torch.allclose(explicit, recon[b:b + 1], atol=1e-5), b
+    on_dev, off_dev = 0.0, 0.0
+    single = torch.nonzero(nact == 1).flatten()[:64]
+    for b in single.tolist():
+        j = int(torch.nonzero(x[b]).flatten()[0])
+        on_dev = max(on_dev, float((recon[b, j] - y[b, j]).abs()))
+        off = (recon[b] - y[b]).abs().clone()
+        off[j] = 0.0
+        off_dev = max(off_dev, float(off.max()))
+    assert on_dev < 1e-5, f"on-target solo != full on single-active: {on_dev:.3e}"
+    return {"closed_form_vs_explicit_rows": int(rows.numel()),
+            "n_single_active_probed": int(single.numel()),
+            "single_active_on_target_max_dev": on_dev,
+            "single_active_off_target_max_dev": off_dev,
+            "single_active_full_match": bool(off_dev < 1e-5)}
+
+
+def _hist_kl(full_v, recon_v, edges) -> tuple[float, float]:
+    """(KL(full||recon), KL(recon||full)) between Laplace-smoothed histograms on
+    shared fine bins (edges cover both samples by construction, so nothing is
+    clipped)."""
+    import numpy as np
+    nb = len(edges) - 1
+    cf = np.histogram(full_v, bins=edges)[0].astype(np.float64)
+    cr = np.histogram(recon_v, bins=edges)[0].astype(np.float64)
+    pf = (cf + KLFREE_LAPLACE) / (cf.sum() + KLFREE_LAPLACE * nb)
+    pr = (cr + KLFREE_LAPLACE) / (cr.sum() + KLFREE_LAPLACE * nb)
+    return float(np.sum(pf * np.log(pf / pr))), float(np.sum(pr * np.log(pr / pf)))
+
+
+def _gauss_kl(m1: float, s1: float, m2: float, s2: float) -> float:
+    """Closed-form KL(N1||N2) with a sigma floor for degenerate (delta) samples."""
+    import math
+    s1, s2 = max(s1, KLFREE_SIGMA_FLOOR), max(s2, KLFREE_SIGMA_FLOOR)
+    return float(math.log(s2 / s1) + (s1 * s1 + (m1 - m2) ** 2) / (2 * s2 * s2) - 0.5)
+
+
+def run_klfree(a, code: CodeAnsatz, model, ab, ab_source: str) -> None:
+    """The --kl-eval driver: one pass over the fixed pool accumulating, per
+    reconstruction ensemble, (a) MSE vs the full model by sample type and by
+    coordinate-class, and (b) per-class pooled output values for the marginal
+    KL comparison; then writes the four klfree_*.json records + the figure."""
+    import numpy as np
+    p = a.p
+    print(f"  klfree pool: seed={a.seed} {KLFREE_BATCHES}x{a.batch} "
+          f"(masks: NONE; deterministic ensembles)")
+    ov = torch.tensor(code.overlap_matrix(), dtype=torch.long, device=model.device)
+    ov.fill_diagonal_(0)
+    max_ov = int(ov.max())
+    class_codes = [ON_TARGET] + list(range(1, max_ov + 1)) + [0]
+    class_names = {ON_TARGET: "on_target", 0: "unrelated"} | {
+        m: f"m{m}" for m in range(1, max_ov + 1)}
+
+    _, pd_l, payload = load_learned(code, p, a.device)
+    assert torch.allclose(pd_l.targets["w_in"], model.w_in, atol=1e-7) and \
+        torch.allclose(pd_l.targets["w_out"], model.w_out, atol=1e-7), \
+        "learned_reference frozen model differs from the rebuilt ansatz model"
+    pd_h = build_hybrid_vpd(model, oracle=True)
+    recon_fns = {
+        "exact": lambda x: _exact_solo_recon(model, x),
+        "learned_hard": lambda x: _vpd_ci_recon(pd_l, x, "hard"),
+        "learned_weighted": lambda x: _vpd_ci_recon(pd_l, x, "weighted"),
+        "hybrid": lambda x: _vpd_ci_recon(pd_h, x, "weighted"),  # oracle gates are 0/1
+    }
+
+    ds = CleanDataset(n_features=model.n_features, p=float(p), device=model.device,
+                      seed=a.seed)
+    type_names = ("empty", "single_active", "multi_active")
+    type_counts = dict.fromkeys(type_names, 0)
+    err_by_type = {n: dict.fromkeys(type_names, 0.0) for n in KLFREE_NAMES}
+    err_by_class = {n: dict.fromkeys(class_codes, 0.0) for n in KLFREE_NAMES}
+    abs_by_class = {n: dict.fromkeys(class_codes, 0.0) for n in KLFREE_NAMES}
+    max_by_class = {n: dict.fromkeys(class_codes, 0.0) for n in KLFREE_NAMES}
+    class_counts = dict.fromkeys(class_codes, 0)
+    pool = {n: {c: [] for c in class_codes} for n in ("full",) + KLFREE_NAMES}
+    checks, hybrid_max_dev = None, 0.0
+
+    for i in range(KLFREE_BATCHES):
+        x, _ = ds.generate_batch(a.batch)
+        with torch.no_grad():
+            y = model(x)
+            recons = {n: fn(x) for n, fn in recon_fns.items()}
+        nact = (x != 0).sum(dim=1)
+        if checks is None:                        # first batch: semantics asserts
+            checks = _exact_semantics_checks(model, x, y)
+            empty = nact == 0
+            assert float(y[empty].abs().max()) == 0.0, "full model nonzero on empty"
+            for n, r in recons.items():
+                assert float(r[empty].abs().max()) == 0.0, f"{n} nonzero on empty"
+        hybrid_max_dev = max(hybrid_max_dev, float((recons["hybrid"] - y).abs().max()))
+        tmasks = {"empty": nact == 0, "single_active": nact == 1,
+                  "multi_active": nact >= 2}
+        for t, m in tmasks.items():
+            type_counts[t] += int(m.sum())
+        nonempty = nact > 0
+        cls_ne = _coord_classes(x, ov, max_ov)[nonempty]
+        sels = {c: cls_ne == c for c in class_codes}
+        y_ne = y[nonempty]
+        for c, sel in sels.items():
+            class_counts[c] += int(sel.sum())
+            pool["full"][c].append(y_ne[sel].cpu().numpy())
+        for n, r in recons.items():
+            err = (r - y) ** 2
+            for t, m in tmasks.items():
+                err_by_type[n][t] += float(err[m].sum())
+            r_ne, e_ne = r[nonempty], err[nonempty]
+            for c, sel in sels.items():
+                pool[n][c].append(r_ne[sel].cpu().numpy())
+                if bool(sel.any()):
+                    err_by_class[n][c] += float(e_ne[sel].sum())
+                    abs_by_class[n][c] += float(e_ne[sel].sqrt().sum())
+                    max_by_class[n][c] = max(max_by_class[n][c],
+                                             float(e_ne[sel].max()))
+        if (i + 1) % 10 == 0:
+            print(f"  batch {i + 1}/{KLFREE_BATCHES}")
+    checks["hybrid_max_abs_dev_vs_full"] = hybrid_max_dev
+
+    n_feat = model.n_features
+    mse_by_type = {n: {t: (err_by_type[n][t] / (type_counts[t] * n_feat)
+                           if type_counts[t] else float("nan"))
+                       for t in type_names} for n in KLFREE_NAMES}
+
+    # ---- (b) marginal KL per coordinate-class on shared fine bins ----
+    pooled = {n: {c: (np.concatenate(v) if v else np.zeros(0))
+                  for c, v in pool[n].items()} for n in pool}
+    kl, edges_by_class = {}, {}
+    for c in class_codes:
+        allv = [pooled[n][c] for n in ("full",) + KLFREE_NAMES]
+        if pooled["full"][c].size == 0:
+            continue
+        lo = min(float(v.min()) for v in allv if v.size)
+        hi = max(float(v.max()) for v in allv if v.size)
+        pad = 1e-6 + 0.01 * (hi - lo)
+        edges_by_class[c] = np.linspace(lo - pad, hi + pad, KLFREE_BINS + 1)
+        kl[c] = {}
+        fv = pooled["full"][c]
+        for n in KLFREE_NAMES:
+            rv = pooled[n][c]
+            k_fr, k_rf = _hist_kl(fv, rv, edges_by_class[c])
+            kl[c][n] = {
+                "hist": {"kl_full_recon": k_fr, "kl_recon_full": k_rf,
+                         "bins": KLFREE_BINS, "laplace": KLFREE_LAPLACE,
+                         "range": [float(edges_by_class[c][0]),
+                                   float(edges_by_class[c][-1])]},
+                "gauss": {
+                    "kl_full_recon": _gauss_kl(float(fv.mean()), float(fv.std()),
+                                               float(rv.mean()), float(rv.std())),
+                    "kl_recon_full": _gauss_kl(float(rv.mean()), float(rv.std()),
+                                               float(fv.mean()), float(fv.std())),
+                    "sigma_floor": KLFREE_SIGMA_FLOOR},
+            }
+
+    class_table = {n: {} for n in KLFREE_NAMES}
+    for n in KLFREE_NAMES:
+        for c in class_codes:
+            cnt = class_counts[c]
+            fv, rv = pooled["full"][c], pooled[n][c]
+            class_table[n][class_names[c]] = {
+                "count": cnt,
+                "err_mse": err_by_class[n][c] / cnt if cnt else float("nan"),
+                "err_mean_abs": abs_by_class[n][c] / cnt if cnt else float("nan"),
+                "err_max_sq": max_by_class[n][c],
+                "full_mean": float(fv.mean()) if fv.size else float("nan"),
+                "full_std": float(fv.std()) if fv.size else float("nan"),
+                "recon_mean": float(rv.mean()) if rv.size else float("nan"),
+                "recon_std": float(rv.std()) if rv.size else float("nan"),
+            }
+
+    # ---- adjudication of the on-record predictions ----
+    interf = [c for c in class_codes if 1 <= c <= max_ov and c in kl]
+    def _mean_kl(n, cs):
+        return float(np.mean([kl[c][n]["hist"]["kl_full_recon"] for c in cs]))
+    summary = {n: {"on_target": kl[ON_TARGET][n]["hist"]["kl_full_recon"],
+                   "interference_mean": _mean_kl(n, interf),
+                   "unrelated": kl[0][n]["hist"]["kl_full_recon"]}
+               for n in KLFREE_NAMES}
+    best_learned = min(("learned_hard", "learned_weighted"),
+                       key=lambda n: summary[n]["interference_mean"])
+    exact_worse_offtarget = (
+        summary["exact"]["interference_mean"] > summary[best_learned]["interference_mean"]
+        and summary["exact"]["unrelated"] > summary[best_learned]["unrelated"])
+    verdict = {
+        "predictions": dict(KLFREE_PREDICTIONS),
+        "kl_full_recon_summary": summary,
+        "best_learned_variant": best_learned,
+        "single_active_full_match": checks["single_active_full_match"],
+        "single_active_off_target_max_dev": checks["single_active_off_target_max_dev"],
+        "user_prediction_held": bool(exact_worse_offtarget),
+        "counter_prediction_held": bool(
+            checks["single_active_full_match"] and not exact_worse_offtarget),
+        "note": ("adjudicated on hist KL(full||recon): 'user' holds iff exact's KL "
+                 "exceeds the best learned variant's on BOTH the interference-class "
+                 "mean (m>=1) and the unrelated class; 'counter' additionally "
+                 "requires the single-active full-output match it asserts."),
+    }
+
+    proto = {
+        "eval_pool": {"seed": a.seed, "n_batches": KLFREE_BATCHES, "batch": a.batch},
+        "masks": "NONE -- deterministic mechanism ensembles, no stochastic/PGD masks",
+        "delta_excluded": True, "routing": "all-component mode (no subset routing)",
+        "ci": f"lower CI, deterministic; hard threshold ci > {CI_ALIVE_THRESHOLD}",
+        "histogram": {"bins": KLFREE_BINS, "laplace": KLFREE_LAPLACE,
+                      "range": "per class, min/max over full+all recons, 1% pad"},
+        "gaussian_sigma_floor": KLFREE_SIGMA_FLOOR,
+        "coordinate_classes": {class_names[c]: class_counts[c] for c in class_codes},
+        "max_overlap": max_ov,
+        "empty_samples_excluded_from_class_pools": True,
+        "sample_type_counts": dict(type_counts),
+    }
+    ensembles = {
+        "exact": "sum of solo ExactPD per-feature component forwards, active features",
+        "learned_hard": "learned_reference VPD, lower-CI gates thresholded > 0.1",
+        "learned_weighted": "learned_reference VPD, raw lower-CI-weighted gates",
+        "hybrid": "hybrid exact-read/split-neuron-write pieces, oracle activity gates",
+    }
+    os.makedirs(RUNS_DIR, exist_ok=True)
+    for n in KLFREE_NAMES:
+        record = {
+            "tag": f"klfree_{n}",
+            "timestamp": datetime.now().isoformat(timespec="seconds"),
+            "config": _base_config(code, ab, p, a) | {"ab_source": ab_source,
+                                                      "ensemble": ensembles[n]},
+            "protocol": proto,
+            "semantics_checks": checks,
+            "recon_mse_by_sample_type": {t: {"count": type_counts[t],
+                                             "mse": mse_by_type[n][t]}
+                                         for t in type_names},
+            "per_class": class_table[n],
+            "kl_per_class": {class_names[c]: kl[c][n] for c in class_codes if c in kl},
+            "verdict": verdict,
+        }
+        record["config"]["eval_pool"] = proto["eval_pool"]
+        path = os.path.join(RUNS_DIR, f"klfree_{n}.json")
+        with open(path, "w") as f:
+            json.dump(record, f, indent=1)
+        print(f"  saved {path}")
+
+    klfree_figure(class_codes, class_names, kl, pooled, edges_by_class, max_ov, p)
+
+    # ---- console tables ----
+    print("\n(a) reconstruction MSE vs full model by sample type "
+          f"(counts: {', '.join(f'{t}={type_counts[t]}' for t in type_names)})")
+    print(f"  {'ensemble':<18}" + "".join(f"{t:>16}" for t in type_names))
+    for n in KLFREE_NAMES:
+        print(f"  {n:<18}" + "".join(f"{mse_by_type[n][t]:>16.3e}" for t in type_names))
+    print("\n    per-coordinate-class err MSE (non-empty samples)")
+    cls_lbls = [class_names[c] for c in class_codes]
+    print(f"  {'ensemble':<18}" + "".join(f"{l:>12}" for l in cls_lbls))
+    for n in KLFREE_NAMES:
+        print(f"  {n:<18}" + "".join(
+            f"{class_table[n][l]['err_mse']:>12.2e}" for l in cls_lbls))
+    print("\n(b) hist KL(full||recon) / KL(recon||full) per coordinate-class")
+    for n in KLFREE_NAMES:
+        row = "".join(f"{kl[c][n]['hist']['kl_full_recon']:>9.3f}/"
+                      f"{kl[c][n]['hist']['kl_recon_full']:<9.3f}"
+                      for c in class_codes if c in kl)
+        print(f"  {n:<18}{row}")
+    print(f"\n  verdict: user_prediction_held={verdict['user_prediction_held']}  "
+          f"counter_prediction_held={verdict['counter_prediction_held']}  "
+          f"single_active_full_match={checks['single_active_full_match']} "
+          f"(off-target dev {checks['single_active_off_target_max_dev']:.3e})")
+
+
+def klfree_figure(class_codes, class_names, kl, pooled, edges_by_class,
+                  max_ov: int, p: str) -> None:
+    """figures/vpd_objective/klfree_comparison.png: grouped per-class KL bars in
+    both directions (log y) + histogram overlays (full vs exact vs learned_hard
+    vs hybrid) at the highest-populated m >= 2 interference class."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import numpy as np
+
+    colors = dict(zip(KLFREE_NAMES, SERIES))   # fixed order, never cycled
+    labels = {"exact": "ExactPD solo ensemble", "learned_hard": "learned VPD (ci>0.1)",
+              "learned_weighted": "learned VPD (ci-weighted)",
+              "hybrid": "hybrid (oracle neuron writes)"}
+    codes_p = [c for c in class_codes if c in kl]
+    xt = np.arange(len(codes_p))
+    fig, axes = plt.subplots(1, 3, figsize=(16.5, 4.6), constrained_layout=True)
+
+    for ax, direction, title in (
+            (axes[0], "kl_full_recon", "KL(full || recon) per coordinate-class"),
+            (axes[1], "kl_recon_full", "KL(recon || full) per coordinate-class")):
+        w = 0.2
+        for i, n in enumerate(KLFREE_NAMES):
+            vals = np.array([kl[c][n]["hist"][direction] for c in codes_p])
+            ax.bar(xt + (i - 1.5) * w, np.maximum(vals, 1e-12), width=w * 0.92,
+                   color=colors[n], edgecolor="white", linewidth=0.8,
+                   label=labels[n])
+        ax.set_yscale("log")
+        ax.set_xticks(xt, [class_names[c] for c in codes_p], fontsize=8)
+        ax.set_title(title, fontsize=10)
+        ax.set_ylabel("KL (nats, smoothed hist)", fontsize=8)
+        ax.grid(axis="y", alpha=0.25, lw=0.5)
+        ax.legend(fontsize=7)
+
+    # overlay class: highest-populated m >= 2 (fall back to m = 1)
+    cands = [c for c in codes_p if 2 <= c <= max_ov and pooled["full"][c].size]
+    oc = (max(cands, key=lambda c: pooled["full"][c].size) if cands
+          else max((c for c in codes_p if 1 <= c <= max_ov),
+                   key=lambda c: pooled["full"][c].size))
+    ax = axes[2]
+    show = np.linspace(edges_by_class[oc][0], edges_by_class[oc][-1], 121)
+    ax.hist(pooled["full"][oc], bins=show, density=True, color="#4d4d4d",
+            alpha=0.45, label="full model")
+    for n, ls in (("exact", "-"), ("learned_hard", "--"), ("hybrid", ":")):
+        ax.hist(pooled[n][oc], bins=show, density=True, histtype="step",
+                color=colors[n], linestyle=ls, linewidth=2.0, label=labels[n])
+    ax.set_yscale("log")
+    ax.set_title(f"output histogram, class {class_names[oc]} "
+                 f"(n={pooled['full'][oc].size})", fontsize=10)
+    ax.set_xlabel("output value", fontsize=8)
+    ax.set_ylabel("density (log)", fontsize=8)
+    ax.grid(alpha=0.25, lw=0.5)
+    ax.legend(fontsize=7)
+
+    for ax in axes:
+        ax.tick_params(labelsize=8)
+    fig.suptitle("Mask-free distributional evaluation (K=5 transpose, "
+                 f"p={p}): active-mechanism ensembles vs full model", fontsize=11)
+    os.makedirs(FIG_DIR, exist_ok=True)
+    fig.savefig(KLFREE_FIG, dpi=140, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  figure -> {KLFREE_FIG}")
 
 
 # ---------------------------------------------------------------- phase figure
@@ -808,6 +1241,11 @@ def main():
     ap.add_argument("--phase-figure", action="store_true", dest="phase_figure",
                     help="render figures/vpd_objective/phase_diagram.png from all "
                          "sweep_* runs (no fitting)")
+    ap.add_argument("--kl-eval", action="store_true", dest="kl_eval",
+                    help="mask-free distributional evaluation: deterministic "
+                         "active-mechanism ensembles vs the full model on a fixed "
+                         f"{KLFREE_BATCHES} x batch pool (ignores --batches; "
+                         "--seed/--batch still apply) -> klfree_* runs + figure")
     ap.add_argument("--index", action="store_true", help="rebuild index.md only")
     ap.add_argument("--device", default="cpu")
     a = ap.parse_args()
@@ -833,6 +1271,10 @@ def main():
     model = code.model(ab, device=a.device)
     print(f"[{code.name}] p={a.p} ab=({ab[0]:.4f},{ab[1]:.4f}) [{ab_source}] "
           f"pool: seed={a.seed} {a.batches}x{a.batch}")
+
+    if a.kl_eval:  # mask-free distributional evaluation (no masks, no fitting)
+        run_klfree(a, code, model, ab, ab_source)
+        return
 
     if a.sweep_cell:  # Experiment 2: pricing-sweep cell
         assert a.imp_mult is not None, "--sweep-cell requires --imp-mult R"
