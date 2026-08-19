@@ -71,9 +71,19 @@ shared eval pool; results/vpd_objective/).**
   alternative: their `mode: "global"` CI.
 - Exp-2 pricing sweep (imp ×{10..300}): no exact-basis window opens —
   importance pressure starves the gates before rotating the write basis
-  (structured → starvation → CI collapse at ×300). The exact decomposition is
-  both statically dispreferred at default pricing and dynamically unreachable
-  at re-tuned pricing (10k-step budget caveat).
+  (structured → starvation → CI collapse at ×300). Warm-restart extensions
+  (+10k at R=10, R=30) CLOSED the budget caveat: the exact-direction lean
+  recedes (write cos 0.70→0.68, 0.68→0.64) while neuron/feature structure
+  consolidates — the exact basis is dynamically unreachable, full stop.
+- Mask-free distributional test (klfree eval; user-conjectured): with NO
+  masking, the union of active exact components cannot emit the interference
+  the model produces on inactive coordinates (exact solos write only their own
+  coordinate) — total KL(full||recon) ≈ 9.7 for exact PD vs ≈ 1.1 for the
+  learned neuron-basis reconstruction and ≈ 0 for the oracle neuron ensemble
+  (which is distributionally exact, 7e-7). Exact PD is nonetheless the BEST
+  ensemble on-target (KL 0.022 vs 1.37). The per-feature write basis is
+  distributionally inexpressive off-target: VPD's preference is an
+  expressivity fact about output distributions, not only a pricing fact.
 
 **Takeaway.** On its own ground-truth model, VPD-family decomposition is
 basis-correct on the read side and systematically re-bases the write side to
