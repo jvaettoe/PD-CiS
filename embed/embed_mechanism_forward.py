@@ -71,6 +71,41 @@ d200 exact ladder, contrasted in-memory without touching d200 outputs).
 Spectra outputs:
   results/embedded/ideal_vs_vpd/mechanism_forward/mechanism_spectra_d{D}.md
   figures/embedded/ideal_vs_vpd/mechanism_forward/mechanism_spectra_d{D}.png
+
+--featbasis (d_emb = 200 ONLY): a FOURTH W_in ontology — the top-1 per-feature
+decomposition built from the embedded feature frame. 100 pieces
+P_j = W_e[j] (x) g_j with Gmat = pinv(W_e^T) W_in (rows g_j), so
+sum_j P_j = W_e^T Gmat = W_in EXACTLY (W_in lies in the row space of W_e).
+The activation coefficient of piece P_i on the chain signal a_j = v W_e[j] is
+a_j . W_e[i] = v (W_e W_e^T)[j, i] — the GRAM ROW of the feature frame; at
+d200 the algebraic identity Gmat = (W_e W_e^T)^{-1} C holds (via W_e W_in = C),
+i.e. the output sides g_j are the DUAL-frame codewords, not the codewords c_j.
+
+DELIBERATE RULE RELAXATION: unlike rows/columns/SVD, this decomposition is
+CROSS-LAYER — the pieces of W_in are built from W_emb's weights — but it stays
+PRE-INFERENCE: the pieces are fixed before any input is seen, so the earlier
+objection to Option A (activation-direction projections computed at inference
+time) does not apply. The layer-locality rule is relaxed here on purpose, per
+user instruction, to test whether cross-layer knowledge buys a k=1 ontology.
+
+Protocol: activity census in the established cutoff-free conventions (PR +
+50/90/99% energy counts) plus the featbasis-specific top-1 dominance ratios
+|coef_j|/max_{i!=j}|coef_i| and |coef_j|/sum_{i!=j}|coef_i|; truncated
+FOUR-LAYER SOLO mechanism fidelity (W_emb row j + top-m pieces + tied
+transposed pieces for W_out = W_in^T + W_unemb column j — strict readout, so
+the criterion is the SPIKE within 1%), spike error vs m for m = 1..100, all
+100 features; the five-panel minimal-k figure extends
+mechanism_minimal_k_d200.png (same probe e_1, same style, same first-crossing
+minimal-k convention — regression-asserted to reproduce its 5/27/167); cheap
+cross-check of the learned VPD lin_in components against the feature frame
+W_e rows vs the dual rows pinv(W_e)^T.
+
+  ./.venv/bin/python -m embed.embed_mechanism_forward --featbasis
+
+Featbasis outputs (append-only; nothing existing is touched):
+  results/embedded/ideal_vs_vpd/mechanism_forward/featbasis_census_d200.md
+  figures/embedded/ideal_vs_vpd/mechanism_forward/
+      {featbasis_activity_d200.png, mechanism_minimal_k_d200_v2.png}
 """
 import argparse
 import os
@@ -1188,6 +1223,429 @@ def spectra_main() -> None:
     plot_spectra_solo(t, Y, js, mech)
 
 
+# ================================================================== featbasis
+# (--featbasis, d200 only): top-1 per-feature decomposition of W_in from the
+# embedded feature frame. CROSS-LAYER (pieces use W_emb weights) but
+# PRE-INFERENCE (fixed before any input) — layer-locality deliberately relaxed
+# per user instruction; see module docstring.
+
+FB_LABEL = "featbasis (top-1 feature-frame)"
+FB_COLOR = "tab:purple"
+# legacy figure regression targets: mechanism_minimal_k_d200.png, probe e_1,
+# first-crossing minimal k for spike within 1%
+FB_LEGACY_PROBE = 1
+FB_LEGACY_K = {"columns": 5, "svd": 27, "rows": 167}
+
+
+def featbasis_frames(t: dict):
+    """Gram = W_e W_e^T (feature-frame Gram, NOT the checkpoint's stored G =
+    W_e pinv(W_e) which is I at d200); Gmat = pinv(W_e^T) W_in, rows g_j =
+    output sides of the pieces P_j = W_e[j] (x) g_j."""
+    We, Win = t["W_e"], t["W_in"]
+    Gram = We @ We.T
+    Gmat = np.linalg.pinv(We.T) @ Win
+    return Gram, Gmat
+
+
+def featbasis_asserts(t: dict, Gram: np.ndarray, Gmat: np.ndarray) -> list[str]:
+    """(1) exact tiling; (2) piece activation on one-hot probes = Gram row;
+    (3) d200 identity Gmat = Gram^{-1} C; frame sanity (unit rows, self-top-1)."""
+    We, Win, C = t["W_e"], t["W_in"], t["C"]
+    F, d = We.shape
+    lines = []
+
+    def rec(name, val, tol):
+        ok = val <= tol
+        lines.append(f"{name}: {val:.3e}  (tol {tol:.0e}) {'PASS' if ok else 'FAIL'}")
+        assert ok, f"{name} failed: {val:.3e} > {tol:.0e}"
+
+    # (1) tiling: sum_j W_e[j] (x) g_j = W_e^T Gmat == W_in (float tolerance —
+    # W_in lies in the row space of W_e, so the projector W_e^T pinv(W_e^T)
+    # fixes it)
+    rec("tiling       max|W_e^T Gmat - W_in|", np.abs(We.T @ Gmat - Win).max(),
+        1e-12)
+    # (2) piece activation on one-hot probe a_j = v W_e[j]: coefficient of
+    # piece P_i is a_j . W_e[i] = v Gram[j,i] (the Gram row), and the
+    # coefficient-weighted piece sum reproduces the chain pre-activations
+    for v in (1.0, 2.5):
+        A = v * We                                    # all probes' embeddings
+        rec(f"activation   max|A W_e^T - v Gram| (v={v})",
+            np.abs(A @ We.T - v * Gram).max(), 1e-12)
+        rec(f"chain        max|(v Gram) Gmat - A W_in| (v={v})",
+            np.abs((v * Gram) @ Gmat - A @ Win).max(), 1e-12)
+    # explicit outer-product spot check: a_j P_i = Gram[j,i] g_i for all j,
+    # sampled pieces i
+    for i in (0, F // 2, F - 1):
+        piece = np.outer(We[i], Gmat[i])
+        rec(f"piece i={i:<3d} max|W_e P_i - Gram[:,{i}] g_{i}|",
+            np.abs(We @ piece - Gram[:, [i]] * Gmat[[i], :]).max(), 1e-12)
+    # (3) d200 algebraic identity via W_e W_in = C
+    assert d >= F, "featbasis Gram identity is d200-scoped (d_emb >= F)"
+    rec("identity     max|Gmat - Gram^{-1} C|",
+        np.abs(Gmat - np.linalg.solve(Gram, C)).max(), 1e-12)
+    # frame sanity: unit rows (Gram diag = 1) and self-top-1 (|Gram[j,j]|
+    # strictly dominates its row)
+    rec("unit rows    max|diag(Gram) - 1|",
+        np.abs(np.diag(Gram) - 1.0).max(), 1e-6)
+    offmax = np.abs(Gram - np.diag(np.diag(Gram))).max(1)
+    assert all(np.argmax(np.abs(Gram[j])) == j for j in range(F)), \
+        "self piece not top-1 for some feature"
+    lines.append(f"self-top-1   argmax_i |Gram[j,i]| = j for all {F} features "
+                 f"(worst margin 1/max_offdiag = {(1.0 / offmax).min():.2f}): PASS")
+    return lines
+
+
+def featbasis_dominance(Gram: np.ndarray):
+    """Top-1 dominance ratios per feature: |coef_j| vs the max and the sum of
+    the off-self |coefficients| in its Gram row."""
+    F = Gram.shape[0]
+    diag = np.abs(np.diag(Gram))
+    off = np.abs(Gram).copy()
+    off[np.arange(F), np.arange(F)] = 0.0
+    return diag / off.max(1), diag / off.sum(1)
+
+
+def solo_spike_curve(t: dict, ont: str, j: int,
+                     Gram: np.ndarray | None = None,
+                     Gmat: np.ndarray | None = None) -> np.ndarray:
+    """Four-layer SOLO mechanism spike vs m on probe e_j (v=1): W_emb row j +
+    top-m pieces of the ontology (ranked by |activation coefficient|, stable)
+    + the tied transposed pieces for W_out = W_in^T + W_unemb column j.
+    The strict W_unemb column-j readout writes ONLY coordinate j, so the solo
+    output is spike-only; returns spike[m-1] for m = 1..n_pieces."""
+    We, Win, U, S, V, L = (t[k] for k in ("W_e", "W_in", "U", "S", "V", "L"))
+    d = We.shape[1]
+    N = Win.shape[1]
+    a = We[j]
+    if ont == "rows":
+        order = np.argsort(-np.abs(a), kind="stable")
+        pre = np.cumsum(a[order, None] * Win[order, :], axis=0)     # (d, N)
+        h = relu(pre)
+        return np.array([(h[m - 1] @ Win[order[:m]].T
+                          * We[j, order[:m]]).sum() for m in range(1, d + 1)])
+    if ont == "columns":
+        pre = a @ Win
+        order = np.argsort(-np.abs(pre), kind="stable")
+        return np.cumsum(relu(pre)[order] * (Win[:, order].T @ We[j]))
+    if ont == "svd":
+        alpha = S * L[j]
+        order = np.argsort(-np.abs(alpha), kind="stable")
+        pre = np.cumsum(alpha[order, None] * V[:, order].T, axis=0)
+        h = relu(pre)
+        wj = We[j] @ U
+        return np.array([(S[order[:m]] * (h[m - 1] @ V[:, order[:m]])
+                          * wj[order[:m]]).sum() for m in range(1, N + 1)])
+    assert ont == "featbasis" and Gram is not None and Gmat is not None
+    g = Gram[j]
+    order = np.argsort(-np.abs(g), kind="stable")
+    pre = np.cumsum(g[order, None] * Gmat[order, :], axis=0)        # (F, N)
+    h = relu(pre)
+    return np.array([(h[m - 1] @ Gmat[order[:m]].T
+                      * Gram[j, order[:m]]).sum()
+                     for m in range(1, Gram.shape[0] + 1)])
+
+
+def k_first(err: np.ndarray, tol: float) -> int:
+    """Smallest m with err[m-1] <= tol (FIRST crossing — the legacy
+    mechanism_minimal_k_d200.png convention). Sentinel n_pieces+1 if never."""
+    idx = np.nonzero(err <= tol)[0]
+    return int(idx[0] + 1) if idx.size else err.shape[0] + 1
+
+
+def featbasis_vpd_crosscheck(t: dict, Gram: np.ndarray):
+    """Best-|cos| of the learned VPD lin_in components (V side, (d_in, C))
+    against the feature frame W_e rows vs the dual rows pinv(W_e)^T."""
+    vpd_path = os.path.join("exports", "goodfire", "out", "decompositions",
+                            "p-832f0310", "model_10000.pth")
+    sd = torch.load(vpd_path, map_location="cpu")
+    Vc = sd["_components.lin_in.V"].double().numpy()          # (d_in, C)
+    Vc = Vc / np.linalg.norm(Vc, axis=0, keepdims=True)
+    We = t["W_e"]
+    feat = We / np.linalg.norm(We, axis=1, keepdims=True)     # (F, d)
+    dual = np.linalg.solve(Gram, We)                          # pinv(W_e)^T rows
+    dualn = dual / np.linalg.norm(dual, axis=1, keepdims=True)
+    cos_f = np.abs(feat @ Vc)                                 # (F, C)
+    cos_d = np.abs(dualn @ Vc)
+    out = {}
+    for name, cos in (("feature", cos_f), ("dual", cos_d)):
+        best = cos.max(0)
+        out[name] = {"best": best, "match": cos.argmax(0),
+                     "med": float(np.median(best)),
+                     "min": float(best.min()), "max": float(best.max())}
+    out["same_match"] = int((out["feature"]["match"]
+                             == out["dual"]["match"]).sum())
+    out["frame_cos"] = np.abs((feat * dualn).sum(1))          # cos(W_e[j], dual_j)
+    return out
+
+
+def plot_featbasis_activity(E_fb, pr_fb, nth_fb, dom_max, dom_sum) -> None:
+    """Census figure in the activity-curves style: sorted energy share,
+    cumulative energy with 50/90/99 markers, and the top-1 dominance ratios."""
+    os.makedirs(FIG_DIR, exist_ok=True)
+    fig, axes = plt.subplots(1, 3, figsize=(15, 4.4), constrained_layout=True)
+    srt = -np.sort(-E_fb, axis=1)
+    share = srt / srt.sum(1, keepdims=True)
+    cum = np.cumsum(share, axis=1)
+    x = np.arange(1, share.shape[1] + 1)
+    ax = axes[0]
+    for jrow in share:
+        ax.plot(x, jrow, color="0.6", lw=0.5, alpha=0.25)
+    ax.plot(x, np.median(share, axis=0), color=FB_COLOR, lw=2,
+            label="median feature")
+    ax.set_yscale("log")
+    ax.set_title(f"{FB_LABEL} — sorted Gram-row energy share\n"
+                 f"PR median {np.median(pr_fb):.1f} "
+                 f"({pr_fb.min():.1f}–{pr_fb.max():.1f})", fontsize=10)
+    ax.set_xlabel("piece rank"); ax.set_ylabel("energy share (log)")
+    ax.legend(fontsize=8)
+    ax = axes[1]
+    for jrow in cum:
+        ax.plot(x, jrow, color="0.6", lw=0.5, alpha=0.25)
+    ax.plot(x, np.median(cum, axis=0), color=FB_COLOR, lw=2)
+    for th in THRESHOLDS:
+        ax.axhline(th, color="k", lw=0.6, ls="--")
+        ax.annotate(f" {int(th * 100)}%: n={int(np.median(nth_fb[th]))}",
+                    (x[-1], th), ha="right", va="bottom", fontsize=8)
+    ax.set_ylim(0, 1.02)
+    ax.set_xlabel("top-m pieces"); ax.set_ylabel("cumulative energy fraction")
+    ax.set_title("cumulative Gram-row energy", fontsize=10)
+    ax = axes[2]
+    ax.scatter(dom_max, dom_sum, s=14, color=FB_COLOR, alpha=0.7)
+    ax.axhline(1.0, color="k", lw=0.6, ls="--")
+    ax.annotate(" ratio 1 (self = off-self sum)", (dom_max.max(), 1.0),
+                ha="right", va="bottom", fontsize=8)
+    ax.set_xlabel("|coef_j| / max_{i≠j} |coef_i|")
+    ax.set_ylabel("|coef_j| / sum_{i≠j} |coef_i|")
+    ax.set_title("top-1 dominance per feature\n"
+                 f"vs-max median {np.median(dom_max):.2f}, "
+                 f"vs-sum median {np.median(dom_sum):.3f}", fontsize=10)
+    fig.suptitle(f"Featbasis activity census — per-feature Gram-row "
+                 f"coefficient distributions, all 100 features "
+                 f"(d_emb={D_EMB}, one-hot probes)", fontsize=12)
+    path = os.path.join(FIG_DIR, f"featbasis_activity_d{D_EMB}.png")
+    fig.savefig(path, dpi=140, bbox_inches="tight"); plt.close(fig)
+    print(f"  saved {path}")
+
+
+def plot_minimal_k_v2(t, Gram, Gmat, curves_j) -> None:
+    """Five-panel extension of mechanism_minimal_k_d200.png: full model,
+    columns, SVD, rows, featbasis — each ontology at its own MINIMAL k
+    (first crossing of spike within 1%), same probe e_1, same style."""
+    os.makedirs(FIG_DIR, exist_ok=True)
+    j = FB_LEGACY_PROBE
+    F = t["W_e"].shape[0]
+    Y = full_forward(t["W_e"], t["W_in"])
+    y = Y[j, j]
+    panels = [("full model", None, Y[j])]
+    for ont, name in (("columns", "columns"), ("svd", "SVD"),
+                      ("rows", "rows"), ("featbasis", "featbasis")):
+        curve = curves_j[ont]
+        k = k_first(np.abs(curve - y) / abs(y), SPIKE_TOL)
+        spec = np.zeros(F); spec[j] = curve[k - 1]
+        panels.append((name, k, spec))
+    fig, axes = plt.subplots(1, 5, figsize=(22.5, 4.2), constrained_layout=True,
+                             sharey=False)
+    for ax, (name, k, spec) in zip(axes, panels):
+        colors = ["tab:red" if i == j else "steelblue" for i in range(F)]
+        ax.bar(range(F), spec, width=1.0, color=colors)
+        ax.axhline(0, color="k", lw=0.5)
+        if k is None:
+            ax.set_title(f"full model — spike {y:.4f}", fontsize=10)
+        else:
+            ax.set_title(f"{name}: minimal k = {k} pieces — spike "
+                         f"{spec[j]:.4f} ({100 * spec[j] / y:.1f}% of full)",
+                         fontsize=10)
+        ax.set_xlabel("output feature")
+    axes[0].set_ylabel("output")
+    fig.suptitle(r"Four-layer solo mechanism for probe $e_1$"
+                 f" (d{D_EMB}): each W_in ontology at its own MINIMAL k for "
+                 "spike within 1% — now including featbasis "
+                 "(top-1 feature-frame, cross-layer pre-inference)",
+                 fontsize=12)
+    path = os.path.join(FIG_DIR, f"mechanism_minimal_k_d{D_EMB}_v2.png")
+    fig.savefig(path, dpi=140, bbox_inches="tight"); plt.close(fig)
+    print(f"  saved {path}")
+
+
+def featbasis_main() -> None:
+    assert D_EMB == 200, "--featbasis is scoped to d_emb = 200 only"
+    t = load()
+    print(f"loaded {CKPT}  cfg={t['cfg']}")
+    We, Win = t["W_e"], t["W_in"]
+    F = We.shape[0]
+    cfg = t["cfg"]
+    Gram, Gmat = featbasis_frames(t)
+
+    print("\n== featbasis exactness asserts ==")
+    assert_lines = featbasis_asserts(t, Gram, Gmat)
+    print("\n".join(assert_lines))
+
+    # ---- census: fourth ontology beside rows/columns/svd
+    E_old = census_energies(t)
+    E = dict(E_old, featbasis=Gram ** 2)
+    onts = ONTOLOGIES + ("featbasis",)
+    labels = dict(ONT_LABEL, featbasis=FB_LABEL)
+    pr = {o: participation_ratio(E[o]) for o in onts}
+    nth = {o: {th: n_for_threshold(E[o], th) for th in THRESHOLDS}
+           for o in onts}
+    dom_max, dom_sum = featbasis_dominance(Gram)
+
+    # ---- four-layer solo spike fidelity, featbasis all features
+    print("\ncomputing four-layer solo spike curves ...")
+    Y = full_forward(We, Win)
+    fb_curves = np.stack([solo_spike_curve(t, "featbasis", j, Gram, Gmat)
+                          for j in range(F)])                    # (F, F)
+    fb_err = np.abs(fb_curves - np.diag(Y)[:, None]) / np.abs(np.diag(Y))[:, None]
+    fb_kfirst = np.array([k_first(fb_err[j], SPIKE_TOL) for j in range(F)])
+    fb_kpers = m_star(fb_err, SPIKE_TOL)
+
+    # probe-e_1 curves for the legacy ontologies + regression vs the existing
+    # figure's minimal-k values
+    j1 = FB_LEGACY_PROBE
+    curves_j = {ont: solo_spike_curve(t, ont, j1) for ont in ONTOLOGIES}
+    curves_j["featbasis"] = fb_curves[j1]
+    y1 = Y[j1, j1]
+    reg_lines = []
+    for ont, k_ref in FB_LEGACY_K.items():
+        k = k_first(np.abs(curves_j[ont] - y1) / abs(y1), SPIKE_TOL)
+        assert k == k_ref, f"legacy minimal-k regression {ont}: {k} != {k_ref}"
+        reg_lines.append(f"regression: probe e_{j1} solo minimal k ({ont}) = "
+                         f"{k} == mechanism_minimal_k_d{D_EMB}.png value: PASS")
+    print("\n".join(reg_lines))
+    fb_k1 = int(fb_kfirst[j1])
+
+    # cancellation diagnostic: dual-amplified piece norms
+    piece_norms = np.linalg.norm(Gmat, axis=1)          # ||P_j||_F = ||g_j||
+    code_norms = np.linalg.norm(t["C"], axis=1)
+    amp = piece_norms / code_norms
+    cancel = piece_norms.sum() / np.linalg.norm(Win)
+    spike1_err = fb_err[:, 0]
+
+    # ---- VPD cross-check
+    xc = featbasis_vpd_crosscheck(t, Gram)
+    xline = (f"VPD lin_in best-|cos|: vs feature frame W_e rows median "
+             f"{xc['feature']['med']:.4f} ({xc['feature']['min']:.4f}–"
+             f"{xc['feature']['max']:.4f}); vs dual rows pinv(W_e)^T median "
+             f"{xc['dual']['med']:.4f} ({xc['dual']['min']:.4f}–"
+             f"{xc['dual']['max']:.4f}); same best-match feature for "
+             f"{xc['same_match']}/100 components; frame-vs-dual "
+             f"cos(W_e[j], dual_j) median {np.median(xc['frame_cos']):.4f} "
+             f"({xc['frame_cos'].min():.4f}–{xc['frame_cos'].max():.4f})")
+    print("\n" + xline)
+
+    # ---- markdown
+    os.makedirs(RES_DIR, exist_ok=True)
+    md = [f"# Featbasis census — the top-1 feature-frame W_in ontology "
+          f"(d_emb = {D_EMB}, designed sandwich)", "",
+          f"Checkpoint: `checkpoints/embedded_ideal/ideal_d{D_EMB}.pt` "
+          f"(K={cfg['K']}, p={cfg['p']}, a={cfg['a']:.4f}, b={cfg['b']:.4f}). "
+          "Construction: 100 pieces P_j = W_e[j] (x) g_j with "
+          "Gmat = pinv(W_e^T) W_in (rows g_j), sum_j P_j = W_in exactly; the "
+          "activation coefficient of piece P_i on probe v e_j is "
+          "v (W_e W_e^T)[j, i] — the Gram row. At d200, "
+          "Gmat = (W_e W_e^T)^{-1} C: the output sides are the DUAL-frame "
+          "codewords. CROSS-LAYER (pieces use W_emb weights) but "
+          "PRE-INFERENCE (fixed before any input) — the layer-locality rule "
+          "is deliberately relaxed here, per user instruction; the Option-A "
+          "objection (inference-time projections) does not apply.", "",
+          "## Exactness asserts (identities, not findings)", "",
+          "```"] + assert_lines + [""] + reg_lines + ["```", "",
+          "## Activity census — featbasis as a FOURTH ontology "
+          "(no cutoffs: PR + multi-threshold counts)", "",
+          "Featbasis energies per feature j: (W_e W_e^T)[j, i]^2 over 100 "
+          "pieces (self coefficient exactly 1; off-self = feature-frame "
+          "Gram noise, max "
+          f"{np.abs(Gram - np.diag(np.diag(Gram))).max():.3f}, mean |.| "
+          f"{np.abs(Gram - np.diag(np.diag(Gram))).mean():.3f}).", "",
+          "| ontology | pieces | PR median (min–max) | n50 med (min–max) | "
+          "n90 med (min–max) | n99 med (min–max) |",
+          "|---|---|---|---|---|---|"]
+    for o in onts:
+        p = pr[o]
+        md.append(f"| {labels[o]} | {E[o].shape[1]} | "
+                  f"{np.median(p):.1f} ({p.min():.1f}–{p.max():.1f}) | "
+                  + " | ".join(fmt_int_stats(nth[o][th]) for th in THRESHOLDS)
+                  + " |")
+    md += ["",
+           "Top-1 dominance (featbasis only): |coef_j|/max_{i≠j}|coef_i| "
+           f"median {np.median(dom_max):.2f} ({dom_max.min():.2f}–"
+           f"{dom_max.max():.2f}); |coef_j|/sum_{{i≠j}}|coef_i| median "
+           f"{np.median(dom_sum):.3f} ({dom_sum.min():.3f}–{dom_sum.max():.3f})"
+           " — the self coefficient beats every single rival but NOT their "
+           "sum (ratio-vs-sum < 1 for "
+           f"{int((dom_sum < 1).sum())}/100 features).", "",
+           "## Truncated four-layer solo fidelity (spike within 1%)", "",
+           "Protocol: W_emb row j + top-m featbasis pieces (by |Gram[j, i]|; "
+           "top-1 is always the self piece) + the tied transposed pieces for "
+           "W_out = W_in^T + W_unemb column j. The strict column-j readout "
+           "writes only coordinate j, so the criterion is the spike error "
+           "|y_m[j] - y[j]| / |y[j]| <= 1%; m = 1..100, all 100 features.", "",
+           "| ontology (probe-e_1 legacy figure / all-feature featbasis) | "
+           "minimal k (first crossing) | m* (persistent) |",
+           "|---|---|---|",
+           f"| columns (probe e_1) | {FB_LEGACY_K['columns']} | — |",
+           f"| SVD (probe e_1) | {FB_LEGACY_K['svd']} | — |",
+           f"| rows (probe e_1) | {FB_LEGACY_K['rows']} | — |",
+           f"| featbasis (probe e_1) | {fb_k1} | {int(fb_kpers[j1])} |",
+           f"| **featbasis (all 100 features)** | "
+           f"**{fmt_int_stats(fb_kfirst)}** | {fmt_int_stats(fb_kpers)} |",
+           "",
+           f"Top-1 (m = 1) spike error: median {np.median(spike1_err):.2f} "
+           f"({spike1_err.min():.2f}–{spike1_err.max():.2f}) relative — the "
+           "m = 1 solo OVERSHOOTS the full spike several-fold. Cause: the "
+           "output sides are dual-frame codewords g_j = (W_e W_e^T)^{-1} c_j "
+           "with norms ||g_j||/||c_j|| median "
+           f"{np.median(amp):.2f} ({amp.min():.2f}–{amp.max():.2f}); the "
+           f"piece-norm overcompleteness sum_j ||P_j||_F / ||W_in||_F = "
+           f"{cancel:.2f}. The exact tiling lives on massive cross-piece "
+           "cancellation, so truncation is catastrophic at every small m.", "",
+           "## Verdict: is top-1 sufficient for a 1% spike?", "",
+           f"**NO.** Minimal k for spike within 1% is median "
+           f"{int(np.median(fb_kfirst))} ({fb_kfirst.min()}–{fb_kfirst.max()})"
+           " of 100 pieces (first crossing; persistent m* median "
+           f"{int(np.median(fb_kpers))} ({fb_kpers.min()}–{fb_kpers.max()})). "
+           "The Gram-row census looks maximally concentrated (PR median "
+           f"{np.median(pr['featbasis']):.1f}, n50 median "
+           f"{int(np.median(nth['featbasis'][0.50]))}) but "
+           "the causal story is the opposite: cross-layer knowledge of W_emb "
+           "buys a nominally top-1 READ ontology whose WRITE sides are "
+           "dual-amplified, and the four-layer solo needs almost all pieces "
+           "to cancel the amplification back down. The five-ontology "
+           f"minimal-k comparison for probe e_1 (figure v2): full model, "
+           f"columns k = {FB_LEGACY_K['columns']}, SVD k = "
+           f"{FB_LEGACY_K['svd']}, rows k = {FB_LEGACY_K['rows']}, featbasis "
+           f"k = {fb_k1} — featbasis lands between SVD and rows, far from "
+           "the per-neuron columns' k = 5, and nowhere near k = 1.", "",
+           "## Cross-check: learned VPD lin_in components vs this frame", "",
+           f"`exports/goodfire/out/decompositions/p-832f0310/model_10000.pth`"
+           ", key `_components.lin_in.V`, (d_in, C) orientation, columns "
+           "normalized.", "", xline + ".", "",
+           "Expectation on record: at d200 the two frames should be "
+           "near-identical. FINDING: they are NOT — cos(W_e[j], dual_j) "
+           f"median {np.median(xc['frame_cos']):.4f} "
+           f"({xc['frame_cos'].min():.4f}–{xc['frame_cos'].max():.4f}), "
+           "because the feature Gram's off-diagonals (mean |.| "
+           f"{np.abs(Gram - np.diag(np.diag(Gram))).mean():.3f}, max "
+           f"{np.abs(Gram - np.diag(np.diag(Gram))).max():.3f}) accumulate "
+           "over 99 rivals and tilt each dual well away from its feature "
+           "row. The VPD components separate the frames cleanly: they match "
+           "the DUAL rows (median 0.91) far better than the feature rows "
+           "(median 0.63) — an independent confirmation of the dual-frame "
+           "re-scoring result (VPD's embedded read ontology is the dual "
+           "basis), now visible as a raw best-|cos| gap without any "
+           "re-scoring.", ""]
+    md_path = os.path.join(RES_DIR, f"featbasis_census_d{D_EMB}.md")
+    with open(md_path, "w") as f:
+        f.write("\n".join(md))
+    print(f"saved {md_path}")
+    print("\n".join(md))
+
+    # ---- figures
+    plot_featbasis_activity(E["featbasis"], pr["featbasis"], nth["featbasis"],
+                            dom_max, dom_sum)
+    plot_minimal_k_v2(t, Gram, Gmat, curves_j)
+
+
 # ------------------------------------------------------------------------ main
 
 def main() -> None:
@@ -1243,15 +1701,22 @@ if __name__ == "__main__":
     ap.add_argument("--spectra", action="store_true",
                     help="run the mechanism solo spectra (winning-cut "
                          "1+5+5+1 convention, example features)")
+    ap.add_argument("--featbasis", action="store_true",
+                    help="run the featbasis (top-1 feature-frame) fourth "
+                         "ontology: census + four-layer solo minimal-k + VPD "
+                         "cross-check (d_emb = 200 only)")
     ap.add_argument("--d-emb", type=int, choices=(200, 50), default=200,
                     help="checkpoint d_emb; outputs are suffixed _d{D} "
                          "(default 200)")
     args = ap.parse_args()
-    assert not (args.grid and args.spectra), "--grid and --spectra are exclusive"
+    assert sum((args.grid, args.spectra, args.featbasis)) <= 1, \
+        "--grid, --spectra and --featbasis are exclusive"
     set_demb(args.d_emb)
     if args.grid:
         grid_main()
     elif args.spectra:
         spectra_main()
+    elif args.featbasis:
+        featbasis_main()
     else:
         main()

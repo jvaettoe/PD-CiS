@@ -177,3 +177,40 @@ spike ≈ K a² G_jj² confirmed with spread (mech ratio med 1.061, 0.447–1.92
 knee softening confirmed for ALL features; ladder smear confirmed. Artifacts:
 `results|figures/embedded/ideal_vs_vpd/mechanism_forward/
 {cutside_grid_d50.md/csv/png, mechanism_spectra_d50.md/png}`.
+
+## Addendum — featbasis (top-1 feature-frame) W_in ontology at d200: exact tiling, Gram-limited causality
+
+A fourth W_in ontology (`--featbasis` mode of `embed/embed_mechanism_forward.py`,
+d200 only), built by deliberately relaxing the layer-locality rule: 100 pieces
+P_j = W_e[j] ⊗ g_j with Gmat = pinv(W_eᵀ) W_in, CROSS-LAYER (the pieces use
+W_emb's weights) but PRE-INFERENCE (fixed before any input — the Option-A
+objection to inference-time projections does not apply). The construction is
+exact and fully algebraic: Σ_j P_j = W_in to 1.9e-15; the activation
+coefficient of piece P_i on probe v·e_j is v (W_e W_eᵀ)[j,i], the feature-frame
+GRAM ROW; and at d200, Gmat = (W_e W_eᵀ)⁻¹ C — the output sides are the
+dual-frame codewords, not the codewords.
+
+**Verdict: the top-1 promise is a census illusion.** The Gram-row census is the
+most concentrated of the four ontologies (PR median 2.3, n50 = 1 everywhere;
+self coefficient beats every single rival by ≥ 3.96×) — but the self piece does
+NOT beat the SUM of its 99 rivals (ratio median 0.177, < 1 for 100/100), and
+the four-layer solo (W_emb row j + top-m pieces + tied transposes + W_unemb
+column j) shows why the causal story inverts: g_j = Gram⁻¹ c_j is
+dual-amplified (‖g_j‖/‖c_j‖ median 2.82, piece-norm overcompleteness
+Σ‖P_j‖_F/‖W_in‖_F = 20.3), so the m = 1 solo OVERSHOOTS the full spike by
+median 4.4× and the exact tiling survives only through massive cross-piece
+cancellation. Minimal k for a 1% spike: median 74 (33–94) first-crossing / 92
+(82–98) persistent, of 100. The five-ontology comparison on probe e_1
+(`mechanism_minimal_k_d200_v2.png`, legacy convention regression-asserted:
+columns 5 / SVD 27 / rows 167): featbasis k = 86 — between SVD and rows,
+nowhere near k = 1; per-neuron columns keep the causal crown at 5.
+
+Bonus falsification from the cheap VPD cross-check: at d200 the feature frame
+and its dual are NOT near-identical (cos(W_e[j], dual_j) median 0.70 — Gram
+off-diagonals, mean |·| 0.056, accumulate over 99 rivals), and the learned VPD
+lin_in components separate them cleanly: best-|cos| vs the dual rows median
+0.911 vs 0.633 for the feature rows (same best-match feature 91/100) — a raw,
+re-scoring-free confirmation that VPD's embedded read ontology is the dual
+basis. Artifacts: `results/embedded/ideal_vs_vpd/mechanism_forward/
+featbasis_census_d200.md`; `figures/embedded/ideal_vs_vpd/mechanism_forward/
+{featbasis_activity_d200.png, mechanism_minimal_k_d200_v2.png}`.

@@ -554,3 +554,44 @@ each model (`toys/<name>/MEMO.md`); this file records what was done and when.
 - Artifacts: results/vpd_objective/runs/klfree_{exact,learned_hard,
   learned_weighted,hybrid}.json; figures/vpd_objective/klfree_comparison.png;
   write_index now skips the klfree_* schema. Not committed.
+
+## 2026-08-19 — featbasis: the top-1 feature-frame W_in ontology is exact in sum but causally the SECOND-WORST; VPD cross-check separates feature frame from dual frame
+- Added --featbasis to embed/embed_mechanism_forward.py (d200 only, user
+  scope). Construction per user spec: 100 pieces P_j = W_e[j] (x) g_j with
+  Gmat = pinv(W_e^T) W_in, sum_j P_j = W_in EXACTLY (tiling 1.9e-15); the
+  activation coefficient of piece P_i on probe v e_j is v (W_e W_e^T)[j,i]
+  — the Gram row (verified numerically, v=1 and 2.5, plus outer-product spot
+  checks); at d200 the identity Gmat = (W_e W_e^T)^{-1} C holds to 1.0e-14
+  (via W_e W_in = C): the output sides are the DUAL-frame codewords.
+  CROSS-LAYER (uses W_emb weights) but PRE-INFERENCE (pieces fixed before
+  any input) — layer-locality deliberately relaxed per user instruction.
+- CENSUS (fourth ontology beside rows/columns/SVD): Gram-row energies give
+  PR median 2.3 (1.8-2.7), n50 = 1 for every feature, n90 = 25 (16-33),
+  n99 = 63 (52-71) of 100. Top-1 dominance: self/max-rival median 5.03
+  (3.96-6.56) — self always wins pairwise — but self/sum-of-rivals median
+  0.177 (< 1 for 100/100): the off-self Gram noise collectively swamps it.
+- SOLO FIDELITY (four-layer protocol: W_emb row j + top-m pieces + tied
+  transposes + W_unemb column j; spike within 1%): top-1 is NOT sufficient
+  — the m = 1 solo OVERSHOOTS the full spike by median 4.40x-relative-error
+  (1.32-13.76). Cause: g_j = Gram^{-1} c_j is dual-AMPLIFIED, ||g_j||/||c_j||
+  median 2.82 (1.92-4.52), piece-norm overcompleteness sum||P_j||_F/||W_in||_F
+  = 20.3 — the exact tiling lives on massive cross-piece cancellation.
+  Minimal k for a 1% spike: median 74 (33-94) first-crossing, 92 (82-98)
+  persistent, of 100 pieces.
+- FIVE-ONTOLOGY COMPARISON (mechanism_minimal_k_d200_v2.png, probe e_1,
+  legacy first-crossing convention regression-asserted to reproduce the v1
+  figure's 5/27/167): full model; columns k = 5; SVD k = 27; rows k = 167;
+  featbasis k = 86. Featbasis lands between SVD and rows — cross-layer
+  knowledge of W_emb bought a nominally top-1 READ whose WRITE sides need
+  ~all pieces to cancel; per-neuron columns keep the causal crown.
+- VPD CROSS-CHECK (p-832f0310 model_10000.pth, _components.lin_in.V):
+  expectation on record was feature frame ~ dual frame at d200. FALSIFIED:
+  cos(W_e[j], dual_j) median 0.7036 (0.6091-0.8086) — Gram off-diagonals
+  (mean |.| 0.056, max 0.253) accumulate over 99 rivals. VPD best-|cos| vs
+  duals median 0.9110 (0.2728-0.9621) vs feature rows 0.6332 (0.1526-0.7263),
+  same best-match feature 91/100 — a raw, re-scoring-free confirmation that
+  VPD's lin_in read ontology is the DUAL basis (2026-08-18 entry).
+- Artifacts: results/embedded/ideal_vs_vpd/mechanism_forward/
+  featbasis_census_d200.md; figures/embedded/ideal_vs_vpd/mechanism_forward/
+  {featbasis_activity_d200.png, mechanism_minimal_k_d200_v2.png}. Existing
+  outputs untouched. Not committed.
