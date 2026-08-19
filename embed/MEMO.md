@@ -214,3 +214,15 @@ re-scoring-free confirmation that VPD's embedded read ontology is the dual
 basis. Artifacts: `results/embedded/ideal_vs_vpd/mechanism_forward/
 featbasis_census_d200.md`; `figures/embedded/ideal_vs_vpd/mechanism_forward/
 {featbasis_activity_d200.png, mechanism_minimal_k_d200_v2.png}`.
+
+**Top-1 decomposition (2026-08-19, user-driven).** Slicing W_in along the
+embedded feature directions requires a correction for frame non-orthogonality,
+and its placement decides everything: on the slice contents (min-norm exact
+tiling) pieces are Gram-amplified 2.8x and top-1 overshoots 4-5x (cancellation
+ratio 20x — top-1 by activation is not top-1 by mechanism); with no correction
+top-1 solos are exact but tiling fails (72% residual); with the correction on
+the DIRECTIONS (dual frame: pieces w~_j x c_j) both are exact — tiling to 1e-6
+and top-(1,1,1,1) mechanisms reproducing the full spike (0.6645) with
+off-target exactly zero. This is the exact per-feature PD of the embedded code
+(cross-layer, pre-inference), and the frame VPD's learned lin_in components
+align with (0.911 vs 0.633 for raw feature rows).

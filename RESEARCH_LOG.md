@@ -595,3 +595,16 @@ each model (`toys/<name>/MEMO.md`); this file records what was done and when.
   featbasis_census_d200.md; figures/embedded/ideal_vs_vpd/mechanism_forward/
   {featbasis_activity_d200.png, mechanism_minimal_k_d200_v2.png}. Existing
   outputs untouched. Not committed.
+
+## 2026-08-19 — Top-1 decomposition resolved: the dual-basis slicing (d200)
+- User-driven three-variant resolution of "slice W_in by W_emb feature
+  directions": (A) exact-tiling min-norm -> pieces Gram-amplified 2.8x, top-1
+  overshoots 4-5x, k~86 (top-1 by activation != by mechanism; cancellation
+  ratio 20x); (B) natural writes c_j -> top-1 spike EXACT but tiling residual
+  72%; (DUAL) slices c_j attached to dual-corrected directions -> BOTH exact:
+  tiling 1e-6 AND top-(1,1,1,1) mechanism spike 0.6645 = full model, off-target
+  exactly 0 (all probes incl. max-overlap). The scaling belongs on the
+  DIRECTIONS, not the slice contents. Completes the exact PD for the embedded
+  code: one piece per feature per layer, cross-layer but pre-inference; same
+  frame VPD's learned components matched (0.911).
+  Figure: mechanism_forward/dual_top1_spectra_d200.png.
