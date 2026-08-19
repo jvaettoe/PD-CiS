@@ -427,3 +427,42 @@ each model (`toys/<name>/MEMO.md`); this file records what was done and when.
   d=100, decaying both directions) — the exact-recovery point is also the
   numerically most fragile. Figure:
   mechanism_forward/ladder_recovery_vs_demb.png.
+
+## 2026-08-19 — toys/ramp: saturating-ramp target — bias-free homogeneity voids the 2-ReLU question; bypass prediction REFUTED
+- New self-contained toys/ramp (chain-suite conventions, zero cross-imports):
+  target ramp(x) = ReLU(x) − ReLU(x−0.5) elementwise (rise on (0,0.5),
+  plateau 0.5), needing 2 ReLUs/feature = 200 units at F=100 — above either
+  architecture's budget. ChainMLP 100-50-50-100 and SingleMLP 100-50-100,
+  bias-free; L4, p=0.01, 15,773 steps, standard recipe, seed 42. Data checks
+  pass (labels == clamp(x,0,θ); active-cond baseline E[f²|x>0] = 1/6 by MC).
+  Final L4: chain 5.606e-06, single 5.629e-06.
+- HEADLINE: plateaus are NOT learned — and cannot be. Bias-free ReLU nets are
+  positively homogeneous (f(v·e_j) = v·f(e_j), v>0), so on singleton inputs
+  (~58% of active batches at p=0.01) any transfer curve is a straight line
+  through the origin. Measured: max deviation from linearity 3.0e-7 (float
+  noise); rise slope = plateau slope = 0.598 med for BOTH archs; kinks 0/100;
+  "plateau level" 0.478 is just 0.598×0.8. Both models converge to the same
+  L4-optimal linear compromise — effectively re-learning 0.6·ReLU(x).
+- Bypass verdict vs on-record prediction ("ramp makes layer 2 load-bearing"):
+  REFUTED, instructively — identity bypass x1.13, fitted-A x1.06, numerically
+  IDENTICAL to the relu-target reference at p=0.01; clip frac 0.053 (vs
+  0.103). Since the plateau never forms, the effective task collapses back to
+  scaled-relu and the second nonlinearity stays dispensable.
+- Unit-role census (one-hot v=0.25 vs 0.75, growth h(.75)/h(.25); linear=3):
+  saturators 0.00/feature at every layer (chain L1/L2, single L1); all active
+  units are risers (chain 9.1 L1 + 35.3 L2, single 9.0) — forced by
+  homogeneity, confirmed empirically.
+- Single-vs-chain: single slightly BETTER held-out L4 (5.17e-6 vs 5.27e-6),
+  census identical (100/100 computed, MSE med 1.45e-2 vs 1.46e-2, K1 ~12).
+  Depth buys nothing; the 200-unit-load question is unposable in this family.
+- Census caveat: computed 100/100 is an artifact of the baseline/10 threshold
+  (1/60) — the best purely linear singleton response already scores ~1.2e-2 <
+  1/60, so "computed" does not certify a plateau; transfer curves are the
+  discriminator.
+- FOLLOW-UP required before any depth/superposition conclusion from ramp-like
+  targets: add biases (or shifted nonlinearities) so the θ-kink is
+  representable; only then can "2 ReLUs per feature vs 50-unit budget" bind.
+- Artifacts: toys/ramp/{data,model,train,census,ramp_analysis}.py, README.md;
+  checkpoints/ramp_{chain,single}_p0.01_l4_s42.pt; results/{census,
+  ramp_analysis}.md; figures/{transfer_curves,bypass,unit_roles,census_k,
+  census_mse_sorted}.png. Not committed; MEMO.md deferred.
