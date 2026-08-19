@@ -1,18 +1,23 @@
-"""Ramp-specific analyses for the trained models (chain + single, L4, p=0.01).
+"""Ramp-specific analyses for the trained models (chain + single, L4, p=0.01),
+run for both variants: bias-free (homogeneity control) and hidden-layer-bias.
 
 1. Transfer curves: per-feature output on one-hot probes v in [-1, 1];
-   rise slope, plateau level/slope/flatness, kink position, and the exact
+   rise slope, plateau level/slope/flatness, kink position, and the
    homogeneity check (bias-free nets satisfy f(v e_j) = v f(e_j) for v > 0,
-   so a genuine plateau is impossible on singletons — measure how the model
-   compromises).
-2. Bypass ablation of the chain's layer 2 (identity + lstsq-fitted linear
-   map), held-out L4 ratios vs the relu-target reference (1.13x / 1.06x at
-   p = 0.01, toys/chain/results/bypass_sweep.md). On-record prediction: the
+   so a genuine plateau is impossible on singletons; hidden biases — the
+   toys/uand-style deliberate departure — make the theta-kink representable).
+2. Bypass ablation of the chain's layer 2 (identity + lstsq-fitted linear/
+   affine map), held-out L4 ratios vs the relu-target reference (1.13x /
+   1.06x at p = 0.01, toys/chain/results/bypass_sweep.md) and, for the biased
+   chain, vs the measured bias-free ramp control. On-record prediction: the
    ramp makes layer 2 load-bearing.
 3. Unit-role census: one-hot probes at v = 0.25 (mid-rise) vs v = 0.75
    (plateau); units whose activation saturates between the probes (growth
    ratio < 1.5 vs 3 for linear) are saturation-implementers.
 4. Single-vs-chain: held-out L4 + computed counts.
+
+Outputs: results/ramp_analysis.md (bias-free) and ramp_analysis_bias.md;
+figures {transfer_curves,bypass,unit_roles}[_bias].png.
 
   python ramp_analysis.py
 """
@@ -96,18 +101,31 @@ def held_out_l4(fwd, batches: int = 40, batch: int = 8192):
 
 
 def bypass(chain):
+    """Layer-2 ablations. Identity bypass drops only the ReLU (keeps W2 and,
+    when present, b2); the fitted map is linear for the bias-free control and
+    affine (extra ones column in the lstsq) for the biased chain."""
     W1, W2, W3 = chain.w1.detach(), chain.w2.detach(), chain.w3.detach()
+    b1, b2 = chain.b1.detach(), chain.b2.detach()
     xs, _ = SparseDataset(P, seed=FIT_SEED).generate_batch(131072)
     with torch.no_grad():
-        h1 = torch.relu(xs @ W1)
+        h1 = torch.relu(xs @ W1 + b1)
         live = h1.sum(1) > 0
-        pre2 = h1[live] @ W2
-        clip = float(((pre2 < 0) & (h1[live] @ torch.abs(W2) > 1e-6))
-                     .float().mean())
-        A = torch.linalg.lstsq(h1[live], torch.relu(pre2)).solution
-    l4_orig = held_out_l4(lambda x: torch.relu(torch.relu(x @ W1) @ W2) @ W3)
-    l4_id = held_out_l4(lambda x: (torch.relu(x @ W1) @ W2) @ W3)
-    l4_A = held_out_l4(lambda x: (torch.relu(x @ W1) @ A) @ W3)
+        pre2 = h1[live] @ W2 + b2
+        clip = float(((pre2 < 0) & (h1[live] @ torch.abs(W2)
+                                    + b2.abs() > 1e-6)).float().mean())
+        if chain.has_bias:
+            X = torch.cat([h1[live], torch.ones(int(live.sum()), 1)], 1)
+            sol = torch.linalg.lstsq(X, torch.relu(pre2)).solution
+            A, c = sol[:-1], sol[-1]
+        else:
+            A = torch.linalg.lstsq(h1[live], torch.relu(pre2)).solution
+            c = torch.zeros(W2.shape[1])
+    l4_orig = held_out_l4(
+        lambda x: torch.relu(torch.relu(x @ W1 + b1) @ W2 + b2) @ W3)
+    l4_id = held_out_l4(
+        lambda x: (torch.relu(x @ W1 + b1) @ W2 + b2) @ W3)
+    l4_A = held_out_l4(
+        lambda x: (torch.relu(x @ W1 + b1) @ A + c) @ W3)
     return {"clip": clip, "l4_orig": l4_orig, "l4_id": l4_id, "l4_A": l4_A,
             "r_id": l4_id / l4_orig, "r_A": l4_A / l4_orig}
 
@@ -119,11 +137,11 @@ def unit_roles(model):
     layers = {}
     with torch.no_grad():
         for v, tag in ((V_RISE, "lo"), (V_PLAT, "hi")):
-            h1 = torch.relu(v * model.w1.detach())            # (F, d1)
-            layers.setdefault("L1", {})[tag] = h1
+            h1 = torch.relu(v * model.w1.detach() + model.b1.detach())
+            layers.setdefault("L1", {})[tag] = h1              # (F, d1)
             if hasattr(model, "w3"):
-                layers.setdefault("L2", {})[tag] = \
-                    torch.relu(h1 @ model.w2.detach())        # (F, d2)
+                layers.setdefault("L2", {})[tag] = torch.relu(
+                    h1 @ model.w2.detach() + model.b2.detach())  # (F, d2)
     out = {}
     for name, d in layers.items():
         act = d["lo"] > ACT_TAU
@@ -139,22 +157,24 @@ def unit_roles(model):
     return out
 
 
-def main():
-    os.makedirs(RES, exist_ok=True)
-    os.makedirs(FIG, exist_ok=True)
+def run(bias: bool, control_bypass=None):
+    """Full analysis pass for one variant; returns its bypass dict."""
+    tok = "_bias" if bias else ""
+    label = "hidden-layer biases" if bias else "bias-free (homogeneity control)"
     models = {}
     for arch in ("chain", "single"):
         path = os.path.join(ROOT, "checkpoints",
-                            f"ramp_{arch}_p{P:g}_l4_s{SEED}.pt")
+                            f"ramp_{arch}{tok}_p{P:g}_l4_s{SEED}.pt")
         models[arch], _ = load_checkpoint(path)
-    md = [f"### ramp analysis — L4, p = {P:g}, seed {SEED}, theta = {THETA}",
-          ""]
+    md = [f"### ramp analysis — {label}; L4, p = {P:g}, seed {SEED}, "
+          f"theta = {THETA}", ""]
+    print(f"--- variant: {label} ---")
 
     # -- 1. transfer curves ------------------------------------------------
     md += ["## Transfer curves (one-hot probes, v in [-1, 1])", "",
            "| arch | rise slope | plateau level | plateau slope | plateau "
-           "span | kink found | homog. dev max | neg-side max |",
-           "|---|---|---|---|---|---|---|---|"]
+           "span | kink found | kink position | homog. dev max | neg-side "
+           "max |", "|---|---|---|---|---|---|---|---|---|"]
     tc = {}
     for arch, model in models.items():
         vs, curves = transfer_curves(model)
@@ -165,18 +185,18 @@ def main():
                   f"{med_iqr(st['plateau_level'])} | "
                   f"{med_iqr(st['plateau_slope'])} | "
                   f"{med_iqr(st['plateau_span'])} | {n_kink}/100 | "
-                  f"{st['homog_dev'].max():.2e} | "
+                  f"{med_iqr(st['kink'])} | {st['homog_dev'].max():.2e} | "
                   f"{med_iqr(st['neg_max'])} |")
-        print(f"{arch}: rise slope {med_iqr(st['rise_slope'])}, plateau slope "
-              f"{med_iqr(st['plateau_slope'])}, kinks {n_kink}/100, "
-              f"max homogeneity deviation {st['homog_dev'].max():.2e}")
+        print(f"{arch}: rise slope {med_iqr(st['rise_slope'])}, plateau "
+              f"slope {med_iqr(st['plateau_slope'])}, plateau span "
+              f"{med_iqr(st['plateau_span'])}, kinks {n_kink}/100 at "
+              f"{med_iqr(st['kink'])}, homog dev max "
+              f"{st['homog_dev'].max():.2e}")
     md += ["", "Ideal ramp: rise slope 1, plateau level 0.5, plateau slope 0, "
            "kink at v = 0.5. Bias-free nets are positively homogeneous "
-           "(f(v e_j) = v f(e_j), v > 0): homog. dev max is the largest "
-           "deviation of any curve from a straight line through the origin — "
-           "if it is at float-noise level, plateaus are impossible on "
-           "singletons and the fitted rise slope is the model's linear "
-           "compromise.", ""]
+           "(f(v e_j) = v f(e_j), v > 0): homog. dev max at float-noise level "
+           "means plateaus are impossible on singletons; hidden biases make "
+           "the theta-kink representable.", ""]
 
     fig, axes = plt.subplots(2, 2, figsize=(9, 7), constrained_layout=True,
                              sharex=True, sharey=True)
@@ -205,41 +225,56 @@ def main():
         ax.set_xlabel("one-hot value v")
     for ax in axes[:, 0]:
         ax.set_ylabel("output at own feature")
-    fig.suptitle("ramp: transfer curves on one-hot probes (dashed = ideal, "
-                 "dotted = theta)", fontsize=11)
-    fig.savefig(os.path.join(FIG, "transfer_curves.png"), dpi=140,
+    fig.suptitle(f"ramp ({label}): transfer curves on one-hot probes "
+                 "(dashed = ideal, dotted = theta)", fontsize=11)
+    fig.savefig(os.path.join(FIG, f"transfer_curves{tok}.png"), dpi=140,
                 bbox_inches="tight")
     plt.close(fig)
 
     # -- 2. bypass ablation (chain layer 2) --------------------------------
     b = bypass(models["chain"])
+    fit_kind = "affine" if bias else "linear"
     md += ["## Layer-2 bypass ablation (chain)", "",
-           "| target | clip frac | L4 original | identity ratio | fitted-A "
-           "ratio |", "|---|---|---|---|---|",
-           f"| ramp | {b['clip']:.3f} | {b['l4_orig']:.2e} | "
-           f"{b['r_id']:.2f} | {b['r_A']:.2f} |",
-           f"| relu (reference, toys/chain) | 0.103 | 1.33e-05 | "
+           f"| target | clip frac | L4 original | identity ratio | fitted "
+           f"({fit_kind}) ratio |", "|---|---|---|---|---|",
+           f"| ramp ({label}) | {b['clip']:.3f} | {b['l4_orig']:.2e} | "
+           f"{b['r_id']:.2f} | {b['r_A']:.2f} |"]
+    if control_bypass is not None:
+        cb = control_bypass
+        md.append(f"| ramp bias-free control (measured) | {cb['clip']:.3f} | "
+                  f"{cb['l4_orig']:.2e} | {cb['r_id']:.2f} | "
+                  f"{cb['r_A']:.2f} |")
+    md += [f"| relu (reference, toys/chain) | 0.103 | 1.33e-05 | "
            f"{REF_RELU['r_id']:.2f} | {REF_RELU['r_A']:.2f} |", "",
            "On-record prediction: the ramp makes layer 2 load-bearing "
            "(ratios well above the relu-target 1.13x / 1.06x).", ""]
     print(f"bypass: clip {b['clip']:.3f}, L4 orig {b['l4_orig']:.2e}, "
-          f"identity x{b['r_id']:.2f}, fitted-A x{b['r_A']:.2f} "
+          f"identity x{b['r_id']:.2f}, fitted x{b['r_A']:.2f} "
           f"(relu ref x{REF_RELU['r_id']:.2f} / x{REF_RELU['r_A']:.2f})")
 
-    fig, ax = plt.subplots(figsize=(6, 4), constrained_layout=True)
+    fig, ax = plt.subplots(figsize=(6.5, 4), constrained_layout=True)
     xs_pos = np.arange(2)
-    ax.bar(xs_pos - 0.18, [b["r_id"], b["r_A"]], 0.36, color="tab:red",
-           label="ramp target")
-    ax.bar(xs_pos + 0.18, [REF_RELU["r_id"], REF_RELU["r_A"]], 0.36,
-           color="tab:orange", label="relu target (reference)")
+    bars = [(f"ramp {label}", [b["r_id"], b["r_A"]], "tab:red")]
+    if control_bypass is not None:
+        bars.append(("ramp bias-free control",
+                     [control_bypass["r_id"], control_bypass["r_A"]],
+                     "tab:purple"))
+    bars.append(("relu target (reference)",
+                 [REF_RELU["r_id"], REF_RELU["r_A"]], "tab:orange"))
+    w = 0.8 / len(bars)
+    for i, (lab, vals, col) in enumerate(bars):
+        ax.bar(xs_pos + (i - (len(bars) - 1) / 2) * w, vals, w, color=col,
+               label=lab)
     ax.axhline(1.0, color="k", lw=0.8)
     ax.set_xticks(xs_pos)
-    ax.set_xticklabels(["identity bypass", "fitted-A bypass"])
+    ax.set_xticklabels(["identity bypass", "fitted-map bypass"])
     ax.set_ylabel("held-out L4 ratio vs original")
-    ax.set_title(f"chain layer-2 bypass cost at p = {P:g}", fontsize=11)
+    ax.set_title(f"chain layer-2 bypass cost at p = {P:g} ({label})",
+                 fontsize=11)
     ax.legend(fontsize=8)
     ax.grid(True, alpha=0.3, axis="y")
-    fig.savefig(os.path.join(FIG, "bypass.png"), dpi=140, bbox_inches="tight")
+    fig.savefig(os.path.join(FIG, f"bypass{tok}.png"), dpi=140,
+                bbox_inches="tight")
     plt.close(fig)
 
     # -- 3. unit-role census ----------------------------------------------
@@ -266,17 +301,18 @@ def main():
     for ax, (arch, name) in zip(np.atleast_1d(axes), panels):
         g = roles[arch][name]["growth"]
         g = g[np.isfinite(g)]
-        ax.hist(g, bins=np.linspace(0, 4, 41), color="tab:blue", alpha=0.8)
+        ax.hist(np.clip(g, 0, 4), bins=np.linspace(0, 4, 41),
+                color="tab:blue", alpha=0.8)
         ax.axvline(3.0, color="k", ls="--", lw=1, label="linear (3)")
         ax.axvline(1.5, color="tab:red", ls=":", lw=1, label="saturation (<1.5)")
         ax.set_title(f"{arch} {name}", fontsize=10)
-        ax.set_xlabel("h(0.75) / h(0.25)")
+        ax.set_xlabel("h(0.75) / h(0.25), clipped to [0, 4]")
         ax.grid(True, alpha=0.3)
     np.atleast_1d(axes)[0].set_ylabel("active (feature, unit) pairs")
     np.atleast_1d(axes)[0].legend(fontsize=7)
-    fig.suptitle("ramp: unit growth ratios between mid-rise and plateau probes",
-                 fontsize=11)
-    fig.savefig(os.path.join(FIG, "unit_roles.png"), dpi=140,
+    fig.suptitle(f"ramp ({label}): unit growth ratios between mid-rise and "
+                 "plateau probes", fontsize=11)
+    fig.savefig(os.path.join(FIG, f"unit_roles{tok}.png"), dpi=140,
                 bbox_inches="tight")
     plt.close(fig)
 
@@ -290,10 +326,18 @@ def main():
         print(f"{arch}: held-out L4 {l4:.2e}, computed {n_comp}/100")
     md.append("")
 
-    with open(os.path.join(RES, "ramp_analysis.md"), "w") as f:
+    out = os.path.join(RES, f"ramp_analysis{tok}.md")
+    with open(out, "w") as f:
         f.write("\n".join(md) + "\n")
-    print(f"results -> {os.path.join(RES, 'ramp_analysis.md')}; "
-          f"figures -> {FIG}")
+    print(f"results -> {out}; figures -> {FIG}")
+    return b
+
+
+def main():
+    os.makedirs(RES, exist_ok=True)
+    os.makedirs(FIG, exist_ok=True)
+    control = run(bias=False)
+    run(bias=True, control_bypass=control)
 
 
 if __name__ == "__main__":

@@ -47,12 +47,22 @@ thresholded verdict: neuron_basis / exact_basis / collapsed / mixed), and
 runs. NB the sweep's fit seed is --fit-seed (default 0); --seed stays the
 EVAL-POOL seed so every cell is scored on the same fixed pool as the variants.
 
+--resume-from TAG (sweep-cell only) warm-restarts a saved cell: the fresh VPD's
+components + CI nets are overwritten with checkpoints/vpd_objective/<TAG>.pt
+(strict modulo the frozen model, which is never saved) and the fit runs for
+--steps MORE steps at the cell's multiplied weights with a fresh optimizer
+(renewed pressure -- the established warm-restart convention). The record is
+append-only under the new tag <TAG>_warm; --phase-figure draws warm points as
+stars at the same multiplier.
+
   ./.venv/bin/python -m biregular.vpd_objective              # oracle + learned evals
   ./.venv/bin/python -m biregular.vpd_objective --hybrid     # eval hybrid_oracle only
   ./.venv/bin/python -m biregular.vpd_objective --fit-ci     # deferred: train CI nets
   ./.venv/bin/python -m biregular.vpd_objective --hybrid --fit-ci  # hybrid_trainedci
   ./.venv/bin/python -m biregular.vpd_objective --index      # rebuild index.md only
   ./.venv/bin/python -m biregular.vpd_objective --sweep-cell --imp-mult 55
+  ./.venv/bin/python -m biregular.vpd_objective --sweep-cell --imp-mult 30 \
+      --resume-from sweep_imp30_s0 --steps 10000    # -> sweep_imp30_s0_warm
   ./.venv/bin/python -m biregular.vpd_objective --phase-figure
 """
 import argparse
@@ -576,6 +586,7 @@ def phase_figure() -> None:
             continue
         rows.append({
             "mult": float(r["config"]["imp_mult"]), "seed": int(r["config"]["fit_seed"]),
+            "warm": "resume_from" in r["config"],
             "steps": int(r["steps"]), "verdict": sb["verdict"],
             "F": sb["F"], "d_mlp": sb["d_mlp"],
             "alive_in": sb["read"]["alive"], "alive_out": sb["write_neuron"]["alive"],
@@ -592,17 +603,23 @@ def phase_figure() -> None:
         print(f"  no sweep_* runs under {RUNS_DIR}; nothing to render")
         return
     rows.sort(key=lambda r: (r["mult"], r["seed"]))
-    x = np.array([r["mult"] for r in rows])
+    base = [r for r in rows if not r["warm"]]   # cold 10k fits: connected lines
+    warm = [r for r in rows if r["warm"]]       # warm restarts: star overlays
+    x = np.array([r["mult"] for r in base])
+    xw = np.array([r["mult"] for r in warm])
     F_ref, N_ref = rows[0]["F"], rows[0]["d_mlp"]
 
-    def col(key):
-        return np.array([r[key] for r in rows], dtype=float)
+    def col(key, rs=None):
+        return np.array([r[key] for r in (base if rs is None else rs)], dtype=float)
 
     def series(ax, keys_labels, hline=None):
         for i, (key, lbl) in enumerate(keys_labels):
             # odd series get OPEN markers so coincident points remain visible
             ax.plot(x, col(key), MARKERS[i] + "-", color=SERIES[i], ms=6, lw=1.5,
                     mfc=SERIES[i] if i % 2 == 0 else "none", mew=1.5, label=lbl)
+            if warm:  # warm restarts at the same multiplier: stars, black edge
+                ax.plot(xw, col(key, warm), "*", ls="none", color=SERIES[i], ms=12,
+                        mec="black", mew=0.6, label=lbl + " (warm)")
         if hline:
             for y, lbl, c in hline:
                 ax.axhline(y, color=c, lw=1.0, ls=":")
@@ -618,10 +635,14 @@ def phase_figure() -> None:
     order = ["collapsed", "mixed", "neuron_basis", "exact_basis"]
     ypos = {v: i for i, v in enumerate(order)}
     for r in rows:
-        ax.scatter(r["mult"], ypos[r["verdict"]], s=70,
-                   color=VERDICT_COLORS[r["verdict"]], zorder=3)
-        ax.annotate(f"s{r['seed']}", (r["mult"], ypos[r["verdict"]]), fontsize=6,
-                    xytext=(4, 5), textcoords="offset points", color="#555555")
+        ax.scatter(r["mult"], ypos[r["verdict"]], s=110 if r["warm"] else 70,
+                   color=VERDICT_COLORS[r["verdict"]], zorder=3,
+                   marker="*" if r["warm"] else "o",
+                   edgecolors="black" if r["warm"] else "none", linewidths=0.6)
+        ax.annotate(f"s{r['seed']}w" if r["warm"] else f"s{r['seed']}",
+                    (r["mult"], ypos[r["verdict"]]), fontsize=6,
+                    xytext=(4, 5 if not r["warm"] else -9),
+                    textcoords="offset points", color="#555555")
     ax.set_xscale("log")
     ax.set_yticks(range(len(order)), order, fontsize=8)
     ax.set_ylim(-0.5, len(order) - 0.5)
@@ -706,6 +727,25 @@ def run_sweep_cell(a, code: CodeAnsatz, model, ab, ab_source: str) -> dict:
     tag = f"sweep_imp{R:g}_s{S}"
     decomp_fit.set_seed(S)  # reproducible V/U + CI init (incl. the data-free warmup)
     pd_v = decomp_fit.build_pd("VPD", model, F)
+    resume_cfg = {}
+    if a.resume_from:  # warm restart: overwrite the fresh state with the saved cell
+        ckpt = os.path.join(CKPT_DIR, f"{a.resume_from}.pt")
+        assert os.path.exists(ckpt), f"--resume-from: no checkpoint {ckpt}"
+        state = torch.load(ckpt, map_location=a.device, weights_only=False)["pd_state"]
+        assert len(state) > 0, f"--resume-from: empty pd_state in {ckpt}"
+        own = {k for k in pd_v.state_dict() if not k.startswith("model.")}
+        assert set(state) == own, (  # strict modulo the (never-saved) frozen model
+            f"--resume-from: state keys mismatch: only_ckpt={sorted(set(state) - own)} "
+            f"only_fresh={sorted(own - set(state))}")
+        missing, unexpected = pd_v.load_state_dict(state, strict=False)
+        assert not unexpected and all(k.startswith("model.") for k in missing), (
+            missing, unexpected)
+        tag = f"{a.resume_from}_warm"  # append-only: never overwrite the original
+        resume_cfg = {"resume_from": a.resume_from,
+                      "resume_checkpoint": os.path.relpath(ckpt, RESULTS + "/.."),
+                      "resume_steps": a.steps}
+        print(f"  warm restart from {ckpt} -> tag {tag} "
+              f"(+{a.steps} steps, fresh optimizer, imp_mult {R:g})")
     curves = decomp_fit.fit_decomposition(
         pd_v, CleanDataset(n_features=F, p=float(a.p), device=a.device, seed=S),
         steps=a.steps, loss_kwargs=fit_kw, seed=S, desc=f"{tag} p={a.p}")
@@ -720,7 +760,7 @@ def run_sweep_cell(a, code: CodeAnsatz, model, ab, ab_source: str) -> dict:
         tag, pd_v, code, ab, a.p, a, steps=a.steps,
         extra_cfg={"ab_source": ab_source, "components": "learned_sweep",
                    "gates": "learned_ci", "imp_mult": R, "fit_seed": S,
-                   "fit_loss_kwargs": fit_kw},
+                   "fit_loss_kwargs": fit_kw} | resume_cfg,
         extra_record={"sweep_basis": sweep})
 
 
@@ -760,6 +800,11 @@ def main():
                     help="sweep-cell fit steps (25000 = the full reference recipe)")
     ap.add_argument("--fit-seed", type=int, default=0, dest="fit_seed",
                     help="sweep-cell fit seed S (--seed stays the eval-pool seed)")
+    ap.add_argument("--resume-from", default=None, dest="resume_from",
+                    help="sweep-cell warm restart: load checkpoints/vpd_objective/"
+                         "<TAG>.pt into the fresh VPD, then fit --steps MORE steps "
+                         "at the cell's weights (fresh optimizer); saves as "
+                         "<TAG>_warm (append-only)")
     ap.add_argument("--phase-figure", action="store_true", dest="phase_figure",
                     help="render figures/vpd_objective/phase_diagram.png from all "
                          "sweep_* runs (no fitting)")

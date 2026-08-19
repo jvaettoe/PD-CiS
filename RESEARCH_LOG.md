@@ -466,3 +466,49 @@ each model (`toys/<name>/MEMO.md`); this file records what was done and when.
   checkpoints/ramp_{chain,single}_p0.01_l4_s42.pt; results/{census,
   ramp_analysis}.md; figures/{transfer_curves,bypass,unit_roles,census_k,
   census_mse_sorted}.png. Not committed; MEMO.md deferred.
+
+## 2026-08-19 — toys/ramp with hidden biases: plateaus form ONLY with depth; layer 2 becomes load-bearing (prediction vindicated once representable)
+- Follow-up to the homogeneity result: added a bias option to both ramp
+  models — hidden-layer biases only, output layer stays bias-free — a
+  deliberate toys-convention departure mirroring toys/uand (ReLU(x_i+x_j−1)
+  needs the −1): the ramp's θ=0.5 kink requires ReLU(x−θ)-type units.
+  Checkpoints gain a _bias token (ramp_{arch}_bias_p0.01_l4_s42.pt); the
+  bias-free runs/results are kept as the homogeneity control (bias-free
+  state_dict keys unchanged: zero-bias plain tensors, not buffers). Same
+  recipe (L4, p=0.01, 15,773 steps, seed 42). Final L4: chain+bias 4.179e-06
+  (vs 5.606e-06 control), single+bias 5.386e-06 (vs 5.629e-06).
+- TRANSFER CURVES (the discriminator): chain+bias LEARNS the plateau —
+  kinks 99/100 at v = 0.505 [0.495, 0.525] (≈ θ!), rise slope 0.733 med,
+  plateau slope 0.206 (span 0.083), homog dev 1.45e-01 (real nonlinearity);
+  imperfect (ideal rise 1 / plateau slope 0) but qualitatively a saturating
+  ramp. single+bias FAILS: kinks 0/100, rise 0.604 ≈ plateau slope 0.567
+  (span 0.227) — despite available biases it stays a near-linear compromise,
+  barely distinguishable from the bias-free control. The 50-unit single
+  layer does NOT manage the 200-ReLU-equivalent load; depth buys the kink.
+- BYPASS (biased chain layer 2): identity x4.43, fitted-AFFINE x1.56 — vs
+  x1.13/x1.06 for BOTH the bias-free ramp control and the relu reference.
+  The on-record prediction ("ramp makes layer 2 load-bearing") is VINDICATED
+  once the target is representable — and the control shows the failure mode:
+  without biases the prediction had failed only because the model never
+  implemented the plateau. Clip frac 0.035.
+- UNIT ROLES (v=0.25 vs 0.75 probes; sat = growth < 1.5, linear = 3):
+  chain+bias L2 is a saturation bank — 49.5/50 units saturating per feature,
+  0 risers (L1: 0.9 sat, 7.2 risers → rise computed in L1, kink applied in
+  L2). single+bias: 22.4 sat + 5.3 risers per feature, yet the OUTPUT stays
+  linear — unit-level saturation exists but does not compose into a
+  functional plateau in one layer. Controls: 0.00 saturators everywhere.
+- CENSUS (all four runs in results/census.md): computed 100/100 everywhere
+  (threshold caveat from the control entry stands); MSE med chain+bias
+  1.12e-02 < single+bias 1.38e-02 ≈ controls 1.45/1.46e-02. K1(>0) inflates
+  with biases (38.6 chain, 25.6 single) via rest-positive units; K1(τ) stays
+  ~9; chain+bias K2(τ) 41.3 — the broad L2 saturation bank.
+- SINGLE-VS-CHAIN VERDICT (biased): chain held-out L4 3.88e-06 beats single
+  4.97e-06 (control had single marginally ahead: 5.17 vs 5.27e-06) — under a
+  genuinely 2-ReLU-per-feature target, depth wins and the second layer's
+  ReLU is functionally necessary.
+- Artifacts: toys/ramp updated (model/train/census/ramp_analysis.py handle
+  both variants; README documents the uand-style bias justification);
+  checkpoints/ramp_{chain,single}_bias_p0.01_l4_s42.pt; results/
+  {census.md, ramp_analysis.md, ramp_analysis_bias.md}; figures/
+  {transfer_curves,bypass,unit_roles}_bias.png + control figures + census_*.
+  Not committed; MEMO.md still deferred.

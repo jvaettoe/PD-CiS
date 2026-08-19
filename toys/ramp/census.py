@@ -1,6 +1,7 @@
-"""Feature-computation census for the ramp models (chain and single).
+"""Feature-computation census for the ramp models (chain and single, with
+and without hidden-layer biases; bias-free = homogeneity control).
 
-Per arch: per-feature active-conditional MSE (ramp baseline E[f^2|x>0] =
+Per run: per-feature active-conditional MSE (ramp baseline E[f^2|x>0] =
 theta^3/3 + theta^2(1-theta) = 1/6, computed = < 1/60) and layer-wise codeword
 lengths on one-hot probes: K1 (h1 preacts) and, for the chain, K2 (h2
 preacts), both >0 and tau conventions.
@@ -43,13 +44,15 @@ def perfeature_mse(model, p: float, batches: int = 80, batch: int = 8192):
 
 
 def layer_ks(model):
-    """Per-feature K at each hidden layer from one-hot probes (unit value)."""
+    """Per-feature K at each hidden layer from one-hot probes (unit value).
+    Biases (constant zeros in the bias-free control) are included."""
     with torch.no_grad():
-        pre1 = model.w1.detach()                      # (F, d1): row j = e_j preacts
+        pre1 = model.w1.detach() + model.b1.detach()  # (F, d1): row j = e_j preacts
         out = {"k1_pos": (pre1 > 0).sum(1).numpy(),
                "k1_tau": (pre1 > TAU).sum(1).numpy()}
         if hasattr(model, "w3"):                      # chain: second hidden layer
-            pre2 = torch.relu(pre1) @ model.w2.detach()   # (F, d2)
+            pre2 = (torch.relu(pre1) @ model.w2.detach()
+                    + model.b2.detach())              # (F, d2)
             out["k2_pos"] = (pre2 > 0).sum(1).numpy()
             out["k2_tau"] = (pre2 > TAU).sum(1).numpy()
     return out
@@ -60,16 +63,17 @@ def main():
     os.makedirs(FIG, exist_ok=True)
     rows, per_run = [], {}
     for path in sorted(glob.glob(os.path.join(ROOT, "checkpoints", "ramp_*.pt"))):
-        m = re.match(r"ramp_(chain|single)_p([\d.]+)_l4_s\d+\.pt",
+        m = re.match(r"ramp_(chain|single)(_bias)?_p([\d.]+)_l4_s\d+\.pt",
                      os.path.basename(path))
         if not m:
             continue
-        arch, p = m.group(1), float(m.group(2))
+        arch, p = m.group(1), float(m.group(3))
+        bias = "yes" if m.group(2) else "no"
         model, _ = load_checkpoint(path)
         mse = perfeature_mse(model, p)
         ks = layer_ks(model)
-        per_run[arch] = {"mse": mse, **ks}
-        row = {"arch": arch, "p": p,
+        per_run[f"{arch}{'+bias' if bias == 'yes' else ''}"] = {"mse": mse, **ks}
+        row = {"arch": arch, "bias": bias, "p": p,
                "n_computed": int((mse < COMPUTED_AT).sum()),
                "mse_median": float(np.median(mse)),
                "k1": f"{ks['k1_pos'].mean():.1f}±{ks['k1_pos'].std():.1f}",
@@ -80,18 +84,19 @@ def main():
         else:
             row["k2"] = row["k2_tau"] = "—"
         rows.append(row)
-        print(f"{arch} p={p:g}: computed {row['n_computed']}/100")
-    rows.sort(key=lambda r: r["arch"])
+        print(f"{arch} bias={bias} p={p:g}: computed {row['n_computed']}/100")
+    rows.sort(key=lambda r: (r["arch"], r["bias"]))
 
     md = ["### ramp census — target ramp(x) = ReLU(x) − ReLU(x−0.5), L4, "
           f"p = 0.01, seed 42; computed = active-cond MSE < {COMPUTED_AT:.3g} "
-          f"(baseline {BASELINE:.3g})", "",
-          "| arch | p | computed /100 | MSE median | K1(>0) | K1(tau) | K2(>0) | "
-          "K2(tau) |", "|---|---|---|---|---|---|---|---|"]
+          f"(baseline {BASELINE:.3g}); bias = hidden-layer biases "
+          "(no = homogeneity control)", "",
+          "| arch | bias | p | computed /100 | MSE median | K1(>0) | K1(tau) | "
+          "K2(>0) | K2(tau) |", "|---|---|---|---|---|---|---|---|---|"]
     for r in rows:
-        md.append(f"| {r['arch']} | {r['p']:g} | {r['n_computed']} | "
-                  f"{r['mse_median']:.2e} | {r['k1']} | {r['k1_tau']} | "
-                  f"{r['k2']} | {r['k2_tau']} |")
+        md.append(f"| {r['arch']} | {r['bias']} | {r['p']:g} | "
+                  f"{r['n_computed']} | {r['mse_median']:.2e} | {r['k1']} | "
+                  f"{r['k1_tau']} | {r['k2']} | {r['k2_tau']} |")
     with open(os.path.join(RES, "census.md"), "w") as f:
         f.write("\n".join(md) + "\n")
     print("\n".join(md))
