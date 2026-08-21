@@ -43,6 +43,23 @@ def regular_code(n_features, n_neurons, K, seed):
     return M.astype(bool)
 
 
+def greedy_regular_code(n_features, n_neurons, K, seed):
+    """Near-birregular code without regular_code's F*K % N constraint: each row
+    takes the K least-used neurons (random tie-breaking), so row degrees are
+    exactly K and column degrees are balanced to within 1 (exactly F*K/N
+    wherever that is an integer)."""
+    assert K <= n_neurons, f"K={K} exceeds n_neurons={n_neurons}"
+    rng = np.random.default_rng(seed)
+    deg = np.zeros(n_neurons)
+    M = np.zeros((n_features, n_neurons), dtype=bool)
+    for f in range(n_features):
+        order = np.argsort(deg + rng.random(n_neurons) * 1e-3)
+        M[f, order[:K]] = True
+        deg[order[:K]] += 1
+    assert (M.sum(1) == K).all() and M.sum(0).max() - M.sum(0).min() <= 1
+    return M
+
+
 def random_code(n_features, n_neurons, K, seed):
     """Each feature picks K random neurons (no neuron-degree constraint)."""
     rng = np.random.default_rng(seed)
