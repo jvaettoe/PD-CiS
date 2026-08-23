@@ -1,0 +1,20 @@
+{
+ "F": 4000,
+ "N": 250,
+ "K": 5,
+ "a": 0.35265815258026123,
+ "b": -0.01218134630471468,
+ "p": 0.001,
+ "decoder": "transpose",
+ "code_seed": 0,
+ "interference": 0.94483882188797,
+ "atten_mse": 3.57514618372079e-05,
+ "leak_mse": 0.0016558468341827393,
+ "atten_l4": 5.112667622597655e-06,
+ "leak_l4": 2.261294866912067e-05,
+ "ratio_mse": 46.31550009682225,
+ "ratio_l4": 4.422925630677207,
+ "solo_off_target_max": 0.0,
+ "solo_check": "vectorized",
+ "solo_on_target_max_dev": 0.0
+}

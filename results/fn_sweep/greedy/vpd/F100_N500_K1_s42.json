@@ -1,0 +1,143 @@
+{
+ "F": 100,
+ "N": 500,
+ "K": 1,
+ "a": 1.0,
+ "b": 0.0,
+ "p": 0.001,
+ "decoder": "transpose",
+ "code_seed": 0,
+ "C": 600,
+ "seed": 42,
+ "tag": "",
+ "steps": 100000,
+ "block_steps": 25000,
+ "alive_history": [
+  {
+   "w_in": 132,
+   "w_out": 125
+  },
+  {
+   "w_in": 100,
+   "w_out": 100
+  },
+  {
+   "w_in": 100,
+   "w_out": 100
+  },
+  {
+   "w_in": 100,
+   "w_out": 100
+  }
+ ],
+ "loss_kw": {
+  "alpha_faithfulness": 0.0,
+  "alpha_importance": 0.0001,
+  "alpha_stoch": 2.0,
+  "alpha_pgd": 2.0,
+  "pnorm": 2.0
+ },
+ "final_total": 1.0534686225582846e-05,
+ "losses": {
+  "total": 9.797343227546663e-06,
+  "terms": {
+   "importance": {
+    "raw": 0.0907087105512619,
+    "weighted": 9.07087105512619e-06
+   },
+   "stoch_recon": {
+    "raw": 9.468309713156486e-08,
+    "weighted": 1.8936619426312972e-07
+   },
+   "pgd_recon": {
+    "raw": 2.6855310920836927e-07,
+    "weighted": 5.371062184167385e-07
+   },
+   "faithful": {
+    "raw": 0.00028160802321508527,
+    "weighted": 0.0
+   }
+  },
+  "per_matrix": {
+   "importance": {
+    "w_in": 0.04533796176314354,
+    "w_out": 0.04537074893712997
+   },
+   "stoch_recon": {
+    "w_in": 5.5553608007130604e-08,
+    "w_out": 5.583170036516094e-08
+   }
+  }
+ },
+ "alignment": {
+  "w_in": {
+   "alive": 100,
+   "C": 600,
+   "feature": {
+    "mean": 0.9587630033493042,
+    "min": 0.8947663307189941,
+    "median": 0.9614735245704651,
+    "coverage": 100,
+    "basis_size": 100
+   },
+   "neuron": {
+    "mean": 0.9587630033493042,
+    "min": 0.8947663307189941,
+    "median": 0.9614735245704651,
+    "coverage": 100,
+    "basis_size": 500
+   },
+   "preference": 0.0,
+   "verdict": "mixed"
+  },
+  "w_out": {
+   "alive": 100,
+   "C": 600,
+   "neuron": {
+    "mean": 0.9093638062477112,
+    "min": 0.5886147618293762,
+    "median": 0.9162573218345642,
+    "coverage": 100,
+    "basis_size": 500
+   },
+   "feature": {
+    "mean": 0.9093638062477112,
+    "min": 0.5886147618293762,
+    "median": 0.9162573218345642,
+    "coverage": 100,
+    "basis_size": 100
+   },
+   "preference": 0.0,
+   "verdict": "collapsed"
+  }
+ },
+ "gate_sign": {
+  "w_in": {
+   "plus": 102.99223327636719,
+   "minus": 1.6709365844726562,
+   "minus_over_plus": 0.016223908651333933
+  },
+  "w_out": {
+   "plus": 102.78460693359375,
+   "minus": 0.0,
+   "minus_over_plus": 0.0
+  }
+ },
+ "ci_stats": {
+  "w_in": {
+   "ci_l0": 0.055908203125,
+   "n_alive_union": 91,
+   "pr_mean_ci": 68.86532592773438
+  },
+  "w_out": {
+   "ci_l0": 0.050048828125,
+   "n_alive_union": 88,
+   "pr_mean_ci": 68.24299621582031
+  },
+  "headline": {
+   "ci_l0": 0.055908203125,
+   "n_alive_union": 91,
+   "pr_mean_ci": 68.86532592773438
+  }
+ }
+}

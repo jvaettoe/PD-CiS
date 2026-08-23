@@ -1,0 +1,143 @@
+{
+ "F": 300,
+ "N": 250,
+ "K": 4,
+ "a": 0.42818012059888344,
+ "b": -0.015347216479268316,
+ "p": 0.001,
+ "decoder": "transpose",
+ "code_seed": 0,
+ "C": 550,
+ "seed": 42,
+ "tag": "",
+ "steps": 100000,
+ "block_steps": 25000,
+ "alive_history": [
+  {
+   "w_in": 305,
+   "w_out": 256
+  },
+  {
+   "w_in": 300,
+   "w_out": 256
+  },
+  {
+   "w_in": 300,
+   "w_out": 256
+  },
+  {
+   "w_in": 300,
+   "w_out": 256
+  }
+ ],
+ "loss_kw": {
+  "alpha_faithfulness": 0.0,
+  "alpha_importance": 0.0001,
+  "alpha_stoch": 2.0,
+  "alpha_pgd": 2.0,
+  "pnorm": 2.0
+ },
+ "final_total": 7.59613758418709e-05,
+ "losses": {
+  "total": 7.543572195572778e-05,
+  "terms": {
+   "importance": {
+    "raw": 0.4823407685756683,
+    "weighted": 4.823407685756683e-05
+   },
+   "stoch_recon": {
+    "raw": 3.9031350570439826e-06,
+    "weighted": 7.806270114087965e-06
+   },
+   "pgd_recon": {
+    "raw": 9.69768803770421e-06,
+    "weighted": 1.939537607540842e-05
+   },
+   "faithful": {
+    "raw": 3.4170341677963734e-05,
+    "weighted": 0.0
+   }
+  },
+  "per_matrix": {
+   "importance": {
+    "w_in": 0.19724306285381318,
+    "w_out": 0.2850977063179016
+   },
+   "stoch_recon": {
+    "w_in": 1.387120701110689e-06,
+    "w_out": 4.095605863767559e-06
+   }
+  }
+ },
+ "alignment": {
+  "w_in": {
+   "alive": 300,
+   "C": 550,
+   "feature": {
+    "mean": 0.9364080429077148,
+    "min": 0.0165928415954113,
+    "median": 0.9612760543823242,
+    "coverage": 298,
+    "basis_size": 300
+   },
+   "neuron": {
+    "mean": 0.2255333662033081,
+    "min": 0.012582249008119106,
+    "median": 0.2249477207660675,
+    "coverage": 168,
+    "basis_size": 250
+   },
+   "preference": 0.7108746767044067,
+   "verdict": "feature"
+  },
+  "w_out": {
+   "alive": 256,
+   "C": 550,
+   "neuron": {
+    "mean": 0.4171220362186432,
+    "min": 0.03840406611561775,
+    "median": 0.37828129529953003,
+    "coverage": 216,
+    "basis_size": 250
+   },
+   "feature": {
+    "mean": 0.3031879961490631,
+    "min": 0.00922353845089674,
+    "median": 0.31280717253685,
+    "coverage": 240,
+    "basis_size": 300
+   },
+   "preference": -0.11393404006958008,
+   "verdict": "mixed"
+  }
+ },
+ "gate_sign": {
+  "w_in": {
+   "plus": 309.6150207519531,
+   "minus": 250.3857421875,
+   "minus_over_plus": 0.8087002419307543
+  },
+  "w_out": {
+   "plus": 807.5565185546875,
+   "minus": 238.8329620361328,
+   "minus_over_plus": 0.29574767406197233
+  }
+ },
+ "ci_stats": {
+  "w_in": {
+   "ci_l0": 0.308349609375,
+   "n_alive_union": 274,
+   "pr_mean_ci": 10.715437889099121
+  },
+  "w_out": {
+   "ci_l0": 0.646240234375,
+   "n_alive_union": 254,
+   "pr_mean_ci": 12.319502830505371
+  },
+  "headline": {
+   "ci_l0": 0.646240234375,
+   "n_alive_union": 274,
+   "pr_mean_ci": 12.319502830505371
+  }
+ }
+}

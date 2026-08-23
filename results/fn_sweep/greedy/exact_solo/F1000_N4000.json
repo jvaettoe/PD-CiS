@@ -1,0 +1,20 @@
+{
+ "F": 1000,
+ "N": 4000,
+ "K": 1,
+ "a": 1.0,
+ "b": 0.0,
+ "p": 0.001,
+ "decoder": "transpose",
+ "code_seed": 0,
+ "interference": 0.0,
+ "atten_mse": 0.0,
+ "leak_mse": 0.0,
+ "atten_l4": 0.0,
+ "leak_l4": 0.0,
+ "ratio_mse": null,
+ "ratio_l4": null,
+ "solo_off_target_max": 0.0,
+ "l4_single_on": 0.0,
+ "l4_single_off": 0.0
+}

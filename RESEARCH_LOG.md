@@ -608,3 +608,44 @@ each model (`toys/<name>/MEMO.md`); this file records what was done and when.
   code: one piece per feature per layer, cross-layer but pre-inference; same
   frame VPD's learned components matched (0.911).
   Figure: mechanism_forward/dual_top1_spectra_d200.png.
+
+## 2026-08-21 — (F, N) sweep: optimal fanning + oracle basis preference
+Built biregular/fn_sweep.py: per-cell K* (L4 argmin over full admissible K
+range, greedy near-biregular codes) and oracle-gated 2x2 basis comparison
+(feature/neuron per matrix) under the exact VPD objective; anchor (100,50)
+reproduced exact_oracle to all digits; cross-checked one cell in Goodfire's
+own codebase via param_decomp/experiments/biregular/fn_cell_oracle_eval.py
+(identical ordering/margins). Base 8x8 grid completed. Established: read side
+feature-basis below the diagonal / neuron above (gate sign-awareness, exact
+3/2 margins at K*=1); write side neuron via interference ownership. Whole-
+piece billing corrects the old reps-artifact (hybrid_oracle now beats exact
+at default pricing). RunPod pipeline (runpod_vpd.sh) + trained-VPD driver
+(fn_vpd_train.py) with two-sided basis-membership alignment metric.
+
+## 2026-08-22 — XL grid, ladder theory, trained-VPD map, code families
+XL grid to F=N=10,000 (224 cells) on the pod. Trained VPD completed on the
+base grid (64 cells): write neuron-aligned everywhere trained; read-side
+ontology transition at high compression (per-feature reads -> O(N) roster
+reads); read-shard saturation of slack capacity explained (stochastic-mask
+variance reduction) with C=F and imp x10 controls; greedy hard-ablation shows
+shards share function in fixed proportions (60 summands, 40 functions).
+Exact-solo leak/attenuation program: ladder formula exact (1.0000x) per cell;
+hypergeometric ensemble 0-17%; two-branch argmin predicts (a,b) to 2%/4.5%;
+zero-parameter theory curves vs K/F/N. Write-side preference FLIPS to feature
+at scale (p*F >~ 1 starves neuron-gate sparsity) — 75/224 greedy cells.
+User-directed rebuild with Ferreira da Silva-Heimersheim's constructions:
+--family {greedy, dfh, dfh_om} with per-family subfolders; dfh ratio grid
+(N | F, 70 cells) for unconstrained K*; dfh completed same day.
+
+## 2026-08-23 — dfh_om, family comparison, few-hot composition, mlp_sweep
+dfh_om (overlap-min, 57 cells) completed. Family comparison: greedy ~ dfh ~
+random-code ensemble (median dev 2.3%/2.4%); overlap-min leaks ~10% less than
+random. Few-hot spectra (biregular/fewhot_spectra.py): joint k-component
+forward exact on-target at every k (solos compose under shared ReLU); summed
+solos miss pairwise cross-talk; loss ratio full/component decays from the
+leak/atten value to 1 by k~40 (MSE) / ~12 (L4); all-hot kills the model
+exactly (b-background). Launched trained-MLP sweep (biregular/mlp_sweep.py):
+495 models (9 F x 9 N x 9 p incl. dFH's p=0.02), oracle + solo complete,
+sharded VPD stage running. First trained-MLP oracle: write side leans
+FEATURE at low p (diverges from designed codes) — census/training-length
+caveats logged. Memo: biregular/MEMO_fn_sweep.md.

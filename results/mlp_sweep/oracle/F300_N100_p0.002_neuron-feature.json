@@ -1,0 +1,52 @@
+{
+ "F": 300,
+ "N": 100,
+ "p": 0.002,
+ "read_basis": "neuron",
+ "write_basis": "feature",
+ "C": 300,
+ "census": {
+  "l4": 2.7073862293036656e-06,
+  "computed": 300,
+  "K_median": 22.0,
+  "K_mean": 21.6
+ },
+ "loss_kw": {
+  "alpha_faithfulness": 0.0,
+  "alpha_importance": 0.0001,
+  "alpha_stoch": 2.0,
+  "alpha_pgd": 2.0,
+  "pnorm": 2.0
+ },
+ "losses": {
+  "total": 0.0031658931262791156,
+  "terms": {
+   "importance": {
+    "raw": 23.186064453125,
+    "weighted": 0.0023186064453125
+   },
+   "stoch_recon": {
+    "raw": 0.00010645751724950969,
+    "weighted": 0.00021291503449901938
+   },
+   "pgd_recon": {
+    "raw": 0.0003171858482528478,
+    "weighted": 0.0006343716965056956
+   },
+   "faithful": {
+    "raw": 0.0,
+    "weighted": 0.0
+   }
+  },
+  "per_matrix": {
+   "importance": {
+    "w_in": 22.58404296875,
+    "w_out": 0.602021484375
+   },
+   "stoch_recon": {
+    "w_in": 1.162358584952664e-18,
+    "w_out": 0.00014087591378483921
+   }
+  }
+ }
+}

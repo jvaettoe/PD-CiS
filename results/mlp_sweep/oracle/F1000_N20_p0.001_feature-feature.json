@@ -1,0 +1,52 @@
+{
+ "F": 1000,
+ "N": 20,
+ "p": 0.001,
+ "read_basis": "feature",
+ "write_basis": "feature",
+ "C": 1000,
+ "census": {
+  "l4": 3.232668779673986e-05,
+  "computed": 0,
+  "K_median": 5.0,
+  "K_mean": 5.429
+ },
+ "loss_kw": {
+  "alpha_faithfulness": 0.0,
+  "alpha_importance": 0.0001,
+  "alpha_stoch": 2.0,
+  "alpha_pgd": 2.0,
+  "pnorm": 2.0
+ },
+ "losses": {
+  "total": 0.0019832154642790557,
+  "terms": {
+   "importance": {
+    "raw": 1.997392578125,
+    "weighted": 0.0001997392578125
+   },
+   "stoch_recon": {
+    "raw": 0.0002221211651340127,
+    "weighted": 0.0004442423302680254
+   },
+   "pgd_recon": {
+    "raw": 0.0006696169567294419,
+    "weighted": 0.0013392339134588838
+   },
+   "faithful": {
+    "raw": 0.0,
+    "weighted": 0.0
+   }
+  },
+  "per_matrix": {
+   "importance": {
+    "w_in": 0.9986962890625,
+    "w_out": 0.9986962890625
+   },
+   "stoch_recon": {
+    "w_in": 0.0,
+    "w_out": 0.00029744915198534724
+   }
+  }
+ }
+}

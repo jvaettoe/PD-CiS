@@ -1,0 +1,150 @@
+{
+ "F": 60,
+ "N": 50,
+ "K": 4,
+ "a": 0.41977519590992984,
+ "b": -0.04877782342880888,
+ "p": 0.001,
+ "decoder": "transpose",
+ "code_seed": 0,
+ "C": 110,
+ "seed": 42,
+ "steps": 150000,
+ "block_steps": 25000,
+ "alive_history": [
+  {
+   "w_in": 76,
+   "w_out": 62
+  },
+  {
+   "w_in": 68,
+   "w_out": 54
+  },
+  {
+   "w_in": 64,
+   "w_out": 52
+  },
+  {
+   "w_in": 64,
+   "w_out": 51
+  },
+  {
+   "w_in": 63,
+   "w_out": 51
+  },
+  {
+   "w_in": 63,
+   "w_out": 50
+  }
+ ],
+ "loss_kw": {
+  "alpha_faithfulness": 0.0,
+  "alpha_importance": 0.0001,
+  "alpha_stoch": 2.0,
+  "alpha_pgd": 2.0,
+  "pnorm": 2.0
+ },
+ "final_total": 2.4641354684717953e-05,
+ "losses": {
+  "total": 2.6885817787842826e-05,
+  "terms": {
+   "importance": {
+    "raw": 0.15218650102615355,
+    "weighted": 1.5218650102615357e-05
+   },
+   "stoch_recon": {
+    "raw": 1.618709334252344e-06,
+    "weighted": 3.237418668504688e-06
+   },
+   "pgd_recon": {
+    "raw": 4.214874697936466e-06,
+    "weighted": 8.429749395872932e-06
+   },
+   "faithful": {
+    "raw": 0.00015157207963056862,
+    "weighted": 0.0
+   }
+  },
+  "per_matrix": {
+   "importance": {
+    "w_in": 0.04492432817816734,
+    "w_out": 0.10726217359304428
+   },
+   "stoch_recon": {
+    "w_in": 7.039611455184058e-07,
+    "w_out": 1.7789340381568763e-06
+   }
+  }
+ },
+ "alignment": {
+  "w_in": {
+   "alive": 63,
+   "C": 110,
+   "feature": {
+    "mean": 0.8752792477607727,
+    "min": 0.018815865740180016,
+    "median": 0.930672287940979,
+    "coverage": 60,
+    "basis_size": 60
+   },
+   "neuron": {
+    "mean": 0.2239285111427307,
+    "min": 0.02425432950258255,
+    "median": 0.22761337459087372,
+    "coverage": 28,
+    "basis_size": 50
+   },
+   "preference": 0.651350736618042,
+   "verdict": "feature"
+  },
+  "w_out": {
+   "alive": 50,
+   "C": 110,
+   "neuron": {
+    "mean": 0.712343692779541,
+    "min": 0.05592755973339081,
+    "median": 0.8331804275512695,
+    "coverage": 49,
+    "basis_size": 50
+   },
+   "feature": {
+    "mean": 0.20751498639583588,
+    "min": 0.023669620975852013,
+    "median": 0.1994328647851944,
+    "coverage": 37,
+    "basis_size": 60
+   },
+   "preference": -0.5048287063837051,
+   "verdict": "neuron"
+  }
+ },
+ "gate_sign": {
+  "w_in": {
+   "plus": 62.84888458251953,
+   "minus": 47.894508361816406,
+   "minus_over_plus": 0.7620582080328206
+  },
+  "w_out": {
+   "plus": 247.70465087890625,
+   "minus": 66.6823501586914,
+   "minus_over_plus": 0.26920104213662893
+  }
+ },
+ "ci_stats": {
+  "w_in": {
+   "ci_l0": 0.062744140625,
+   "n_alive_union": 57,
+   "pr_mean_ci": 6.727994918823242
+  },
+  "w_out": {
+   "ci_l0": 0.180419921875,
+   "n_alive_union": 50,
+   "pr_mean_ci": 20.710832595825195
+  },
+  "headline": {
+   "ci_l0": 0.180419921875,
+   "n_alive_union": 57,
+   "pr_mean_ci": 20.710832595825195
+  }
+ }
+}

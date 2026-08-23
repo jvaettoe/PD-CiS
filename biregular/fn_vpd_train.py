@@ -43,12 +43,14 @@ from core.paths import FIGURES, RESULTS
 from core.vpd import CI_ALIVE_THRESHOLD, VPD
 from embed.embed_equivalence import model_from_code
 
-VPD_DIR = os.path.join(RESULTS, "fn_sweep", "vpd")
-FIG_DIR = os.path.join(FIGURES, "fn_sweep")
+VPD_DIR = os.path.join(RESULTS, "fn_sweep", "greedy", "vpd")  # greedy-family models
+FIG_DIR = os.path.join(FIGURES, "fn_sweep", "greedy")  # greedy-family models
 os.makedirs(VPD_DIR, exist_ok=True)
 ALIVE_FRAC = 0.10          # component alive = Frobenius mass > 10% of side max
 SCORE_HI, SCORE_GAP = 0.6, 0.1   # verdict thresholds on membership scores
-STEPS_DEFAULT = 25_000
+STEPS_DEFAULT = 25_000           # block size; blocks repeat until alive counts settle
+MAX_STEPS_DEFAULT = 150_000
+STABLE_BLOCKS = 2                # stop when alive counts unchanged across 2 boundaries
 PROBE_V = 0.5
 
 
@@ -56,12 +58,13 @@ def cell_model(F_, N_, device="cpu"):
     with open(kfit_path(F_, N_)) as f:
         kf = json.load(f)
     M = torch.tensor(greedy_regular_code(F_, N_, kf["K_star"], CODE_SEED))
-    model = model_from_code(M, kf["a"], kf["b"], DECODER)
-    return model.to(device), kf
+    model = model_from_code(M, kf["a"], kf["b"], DECODER).to(device)
+    model.device = device  # MLPBase caches device at __init__; keep it honest
+    return model, kf
 
 
-def ckpt_path(F_, N_, K, seed):
-    return os.path.join(VPD_DIR, f"F{F_}_N{N_}_K{K}_s{seed}.pt")
+def ckpt_path(F_, N_, K, seed, tag=""):
+    return os.path.join(VPD_DIR, f"F{F_}_N{N_}_K{K}_s{seed}{tag}.pt")
 
 
 # ------------------------------------------------------------- alignment
@@ -148,29 +151,62 @@ def gate_sign_stats(pd_v: VPD, v: float = PROBE_V) -> dict:
 
 # -------------------------------------------------------------- training
 
-def train_cell(F_, N_, *, seed, steps, device):
+def alive_counts(pd_v: VPD) -> dict:
+    out = {}
+    with torch.no_grad():
+        for name in pd_v.param_names:
+            mass = pd_v.V[name].norm(dim=0) * pd_v.U[name].norm(dim=1)
+            out[name] = int((mass > ALIVE_FRAC * mass.max().clamp_min(1e-12)).sum())
+    return out
+
+
+def train_cell(F_, N_, *, seed, steps, device, max_steps=MAX_STEPS_DEFAULT,
+               C_override=None, imp_coeff=None, tag=""):
+    """Train in blocks of `steps` until the per-matrix alive counts are
+    unchanged across STABLE_BLOCKS consecutive block boundaries (every
+    unnecessary component ablated) or max_steps is reached. Each block
+    restarts Adam -- the warm-restart cycling that drove their 62 -> 50
+    consolidation."""
     model, kf = cell_model(F_, N_, device)
     K = kf["K_star"]
-    path = ckpt_path(F_, N_, K, seed)
+    path = ckpt_path(F_, N_, K, seed, tag)
     if os.path.exists(path):
-        print(f"skip F={F_} N={N_} (exists)", flush=True)
+        print(f"skip F={F_} N={N_}{tag} (exists)", flush=True)
         return
-    C = F_ + N_
+    C = C_override if C_override else F_ + N_
     torch.manual_seed(seed)
     pd_v = VPD(model, C=C)   # includes their 200-step faithfulness warmup
     ds = CleanDataset(n_features=F_, p=P, device=device, seed=FIT_SEED)
     loss_kw = dict(DEFAULT_KW)
-    curves = fit_decomposition(pd_v, ds, steps=steps, loss_kwargs=loss_kw,
-                               seed=FIT_SEED, desc=f"VPD F{F_}N{N_}K{K}")
+    if imp_coeff is not None:
+        loss_kw["alpha_importance"] = imp_coeff
+    alive_hist, total_steps = [], 0
+    while True:
+        block = len(alive_hist)
+        curves = fit_decomposition(
+            pd_v, ds, steps=steps, loss_kwargs=loss_kw,
+            seed=FIT_SEED + 97 * block,   # fresh mask RNG; dataset generator continues
+            desc=f"VPD F{F_}N{N_}K{K} b{block}")
+        total_steps += steps
+        alive_hist.append(alive_counts(pd_v))
+        print(f"  block {block}: alive {alive_hist[-1]}", flush=True)
+        settled = (len(alive_hist) > STABLE_BLOCKS
+                   and all(alive_hist[-1] == alive_hist[-1 - i]
+                           for i in range(1, STABLE_BLOCKS + 1)))
+        if settled or total_steps >= max_steps:
+            break
     pd_v.to("cpu")
     model.to("cpu")
+    model.device = "cpu"
     alignment = basis_membership(pd_v)
     gates = gate_sign_stats(pd_v)
     losses = eval_objective(pd_v, p=P)
     ci = pd_v.ci_stats(P)
     rec = {"F": F_, "N": N_, "K": K, "a": kf["a"], "b": kf["b"], "p": P,
            "decoder": DECODER, "code_seed": CODE_SEED, "C": C, "seed": seed,
-           "steps": steps, "loss_kw": loss_kw,
+           "tag": tag,
+           "steps": total_steps, "block_steps": steps,
+           "alive_history": alive_hist, "loss_kw": loss_kw,
            "final_total": curves["total"][-1],
            "losses": losses, "alignment": alignment, "gate_sign": gates,
            "ci_stats": ci}
@@ -210,12 +246,17 @@ def make_map():
         if fn.endswith(".json"):
             with open(os.path.join(VPD_DIR, fn)) as f:
                 rows.append(json.load(f))
+    rows = [r for r in rows if not r.get("tag")]  # tagged control runs excluded
     if not rows:
         print("no trained cells yet")
         return
     from biregular.fn_sweep import F_GRID, N_GRID
-    from biregular.fn_sweep_figures import trained_preference_map
+    from biregular.fn_sweep_figures import (trained_alive_map,
+                                            trained_preference_map,
+                                            trained_preference_scatter)
     trained_preference_map(rows, F_GRID, N_GRID, FIG_DIR)
+    trained_preference_scatter(rows, FIG_DIR)
+    trained_alive_map(rows, F_GRID, N_GRID, FIG_DIR)
 
 
 def main():
@@ -225,7 +266,15 @@ def main():
     ap.add_argument("--alignment", action="store_true")
     ap.add_argument("--map", action="store_true")
     ap.add_argument("--seed", type=int, default=42)
-    ap.add_argument("--steps", type=int, default=STEPS_DEFAULT)
+    ap.add_argument("--steps", type=int, default=STEPS_DEFAULT,
+                    help="block size; blocks repeat until alive counts settle")
+    ap.add_argument("--max-steps", type=int, default=MAX_STEPS_DEFAULT)
+    ap.add_argument("--C", type=int, default=None,
+                    help="override component count (default F + N)")
+    ap.add_argument("--imp", type=float, default=None,
+                    help="override importance coefficient")
+    ap.add_argument("--tag", default="",
+                    help="filename tag for control runs (excluded from maps)")
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available()
                     else "cpu")
     ap.add_argument("--max-f", type=int, default=None)
@@ -233,7 +282,8 @@ def main():
     args = ap.parse_args()
     if args.train_cell:
         train_cell(*args.train_cell, seed=args.seed, steps=args.steps,
-                   device=args.device)
+                   device=args.device, max_steps=args.max_steps,
+                   C_override=args.C, imp_coeff=args.imp, tag=args.tag)
     if args.train_grid:
         todo = [c for c in cells(args.max_f, args.max_n)
                 if os.path.exists(kfit_path(*c))]
@@ -241,7 +291,7 @@ def main():
               f"(device {args.device})", flush=True)
         for F_, N_ in sorted(todo, key=lambda c: c[0] * c[1]):
             train_cell(F_, N_, seed=args.seed, steps=args.steps,
-                       device=args.device)
+                       device=args.device, max_steps=args.max_steps)
     if args.alignment:
         recompute_alignment()
     if args.map:

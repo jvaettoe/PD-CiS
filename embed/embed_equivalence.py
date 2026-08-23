@@ -57,18 +57,19 @@ def load_models():
 
 def fit_ab_on_code(M: torch.Tensor, decoder: str, p: float = P, steps: int = 4000,
                    batch: int = 4096, pool: int = 131072, lr: float = 0.01,
-                   seed: int = 31337):
+                   seed: int = 31337, device: str = "cpu",
+                   dtype: torch.dtype = torch.float64):
     """(a, b) L4 fit for an ARBITRARY boolean code M (F, N) -- mirror of
     CodeAnsatz.fit_ab, needed for extracted codes M-hat."""
     F = M.shape[0]
-    Mf = M.double()
+    Mf = M.to(dtype).to(device)
     PINV = torch.linalg.pinv(Mf.T)
-    ds = CleanDataset(n_features=F, p=p, device="cpu", seed=seed)
+    ds = CleanDataset(n_features=F, p=p, device=device, seed=seed)
     x_pool, y_pool = ds.generate_batch(pool)
-    x_pool, y_pool = x_pool.double(), y_pool.double()
+    x_pool, y_pool = x_pool.to(dtype), y_pool.to(dtype)
     gen = torch.Generator().manual_seed(seed)
-    a = torch.tensor(1.0, dtype=torch.float64, requires_grad=True)
-    b = torch.tensor(0.0, dtype=torch.float64, requires_grad=True)
+    a = torch.tensor(1.0, dtype=dtype, requires_grad=True, device=device)
+    b = torch.tensor(0.0, dtype=dtype, requires_grad=True, device=device)
     opt = torch.optim.Adam([a, b], lr=lr)
     sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, steps)
     for _ in range(steps):

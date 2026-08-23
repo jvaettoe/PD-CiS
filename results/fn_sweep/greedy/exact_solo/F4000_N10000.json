@@ -1,0 +1,19 @@
+{
+ "F": 4000,
+ "N": 10000,
+ "K": 1,
+ "a": 1.0,
+ "b": 0.0,
+ "p": 0.001,
+ "decoder": "transpose",
+ "code_seed": 0,
+ "interference": 0.0,
+ "atten_mse": 0.0,
+ "leak_mse": 0.0,
+ "atten_l4": 0.0,
+ "leak_l4": 0.0,
+ "ratio_mse": null,
+ "ratio_l4": null,
+ "solo_off_target_max": 0.0,
+ "solo_check": "analytic (K=1, a=1, b=0: model exact)"
+}
